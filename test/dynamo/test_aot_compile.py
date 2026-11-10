@@ -901,17 +901,19 @@ def _set_pooling(mode):
 
 
 class CountedKey:
-    # Hashes into `name`'s slot and answers False to the first `misses`
-    # comparisons a lookup of `name` makes against it, so a guard on `name`
-    # misses the global that many times and finds it after: one way a live guard
-    # tree can reject a call in the dispatch scan and accept it on the re-check.
+    # Hashes into `name`'s slot and compares unequal to it until `misses` guard
+    # evaluations wrapped by spending() have run, so a guard on `name` misses
+    # the global that many times and finds it after: one way a live guard tree
+    # can reject a call in the dispatch scan and accept it on the re-check.
     # Which operand the dict puts on the left does not matter: str.__eq__
-    # returns NotImplemented for a non-str, so this __eq__ runs either way. A
-    # lookup that misses fails the tree wherever it sits, so each check() the
-    # tree makes consumes exactly one miss however many guards read `name`.
+    # returns NotImplemented for a non-str, so this __eq__ runs either way.
+    # Misses are spent per evaluation, not per comparison: a dict lookup keeps
+    # probing past an unequal entry until it reaches an empty slot, and the
+    # probe sequence can come back to this one, so whether one lookup compares
+    # it once or twice depends on the str hash seed.
     def __init__(self, name, misses):
         self.name = name
-        self.compares, self.misses = 0, misses
+        self.compares, self.lookups, self.misses = 0, 0, misses
 
     def __hash__(self):
         return hash(self.name)
@@ -920,7 +922,20 @@ class CountedKey:
         if other is self:
             return True
         self.compares += 1
-        return self.compares > self.misses
+        return self.misses <= 0
+
+    def spending(self, evaluate):
+        # Each call of the returned function spends one miss, and counts as a
+        # lookup if it compared this key at all.
+        def spend(*args, **kwargs):
+            compares = self.compares
+            try:
+                return evaluate(*args, **kwargs)
+            finally:
+                self.misses -= 1
+                self.lookups += self.compares > compares
+
+        return spend
 
 
 AOT_BRANCH_SCALE = 3.0
@@ -3639,9 +3654,10 @@ from user code:
         # the next lookup, so the scan rejects [1] and the re-check accepts it:
         # the call is served [1]'s graph at the cost of one more check() of its
         # tree.
-        _, saved = self._install_global_probe("AOT_BRANCH_SCALE", misses=1)
+        probe, saved = self._install_global_probe("AOT_BRANCH_SCALE", misses=1)
         manager = model.forward.compiled_results[1]._artifacts.guard_manager
-        with patch.object(manager, "check", wraps=manager.check) as check:
+        spending = probe.spending(manager.check)
+        with patch.object(manager, "check", wraps=spending) as check:
             out = model(x, 1)
         self.assertEqual(out, x * saved)
         self.assertEqual(check.call_count, 2)
@@ -3891,16 +3907,21 @@ from user code:
         # the entry says.
         model, x = self._aot_compile_mode_branches()
         probe, _ = self._install_global_probe("AOT_BRANCH_SCALE", misses=2)
-        with self.assertRaises(RuntimeError) as ctx:
-            model(x, 1)
+        manager = model.forward.compiled_results[1]._artifacts.guard_manager
+        spending = probe.spending(manager.check)
+        with patch.object(manager, "check", wraps=spending) as check:
+            with self.assertRaises(RuntimeError) as ctx:
+                model(x, 1)
         message = str(ctx.exception)
-        # Two rejections in dispatch, then the report's accept: one lookup per
-        # evaluation, since one DictGetItemGuardAccessor is rooted at the global.
-        # That accessor skips the lookup on a check() whose manager's dict tag
-        # matches (matches_dict_tag in guards.cpp, under any config); the probe's
-        # pop/insert bumped this module dict's version past the tag the manager
-        # holds, so no evaluation skips it.
-        self.assertEqual(probe.compares, 3)
+        # Two rejections in dispatch, each a lookup that missed, then the
+        # report's accept (check_verbose, after the misses are spent). One
+        # DictGetItemGuardAccessor is rooted at the global, and it skips the
+        # lookup on a check() whose manager's dict tag matches (matches_dict_tag
+        # in guards.cpp, under any config); the probe's pop/insert bumped this
+        # module dict's version past the tag the manager holds, so neither
+        # check() skips it.
+        self.assertEqual(check.call_count, 2)
+        self.assertEqual(probe.lookups, 2)
         self.assertIn(f"  [1] {_ACCEPTED_IN_THE_REPORT}", message)
         # One entry line per result: the explanation is all [1] contributes, so
         # no blank "  [1] " line follows it from an accept's empty verbose parts.
@@ -7583,10 +7604,9 @@ from user code:
             # False without running the tree, which is what the fast path this
             # covers answers; every check() after the scan's runs the real tree,
             # which the rebind above passes. Stubbed rather than forced with
-            # _install_global_probe, whose one miss is a budget ANY reader of the
-            # name spends: in whole-file order a reader that got there first left
-            # the scan accepting and the re-check pass, the thing under test,
-            # unexercised.
+            # _install_global_probe: the stub rejects the scan's check() alone,
+            # whatever else reads the name, so the re-check pass, the thing
+            # under test, is always exercised.
             answers.append(None)
             return len(answers) > 1 and real_check(*args, **kwargs)
 
