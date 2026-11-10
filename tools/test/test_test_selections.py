@@ -16,6 +16,7 @@ try:
     from tools.testing.test_selections import (
         calculate_shards,
         get_job_base_name,
+        get_test_times_lookup_keys,
         THRESHOLD,
     )
 except ModuleNotFoundError:
@@ -659,6 +660,39 @@ class TestGetJobBaseName(unittest.TestCase):
             "env / build",
         ):
             self.assertEqual(get_job_base_name(name), name)
+
+
+class TestGetTestTimesLookupKeys(unittest.TestCase):
+    def test_plain_build_env_has_single_key(self) -> None:
+        for name in ("linux-noble-rocm-py3.11-mi350", "", None):
+            self.assertEqual(get_test_times_lookup_keys(name), [name])
+
+    def test_preview_falls_back_to_base_build_env(self) -> None:
+        # test-times.json never has the preview key; without the fallback the
+        # lookup lands on the cross-platform "default" average and undershards.
+        self.assertEqual(
+            get_test_times_lookup_keys(
+                get_job_base_name(
+                    "linux-noble-rocm-preview-py3.11-mi350 / test "
+                    "(default, 1, 8, amd-dpx-linux.rocm.gpu.gfx950.1)"
+                )
+            ),
+            [
+                "linux-noble-rocm-preview-py3.11-mi350",
+                "linux-noble-rocm-py3.11-mi350",
+            ],
+        )
+
+    def test_preview_as_last_segment(self) -> None:
+        self.assertEqual(
+            get_test_times_lookup_keys("linux-rocm-preview"),
+            ["linux-rocm-preview", "linux-rocm"],
+        )
+
+    def test_preview_substring_is_not_stripped(self) -> None:
+        # Only a whole "-preview" segment is a variant tag.
+        for name in ("linux-previewer-py3", "linux-rocmpreview-py3"):
+            self.assertEqual(get_test_times_lookup_keys(name), [name])
 
 
 if __name__ == "__main__":

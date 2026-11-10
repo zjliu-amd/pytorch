@@ -19491,8 +19491,10 @@ def forward(self, arg0_1: "Sym(s77)", arg1_1: "Sym(s27)", arg2_1: "Sym(s53)", ar
                         nonlocal inp_refs
                         nonlocal matmul_seen
 
-                        gc.collect()
                         if func is aten.mm.out:
+                            # Only collect here: a gc.collect() per dispatched
+                            # op scales with heap size and makes this test slow.
+                            gc.collect()
                             matmul_seen = True
                             if len(inps) != 0:
                                 raise AssertionError(

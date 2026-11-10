@@ -78,6 +78,7 @@ from tools.testing.test_selections import (
     calculate_shards,
     get_job_base_name,
     get_test_case_configs,
+    get_test_times_lookup_keys,
     NUM_PROCS,
     NUM_PROCS_FOR_SHARDING_CALC,
     ShardedTest,
@@ -2305,10 +2306,11 @@ def load_test_times_from_file(file: str) -> dict[str, Any]:
     print_to_stderr(f"JOB_NAME={raw_job_name}")
     print_to_stderr(f"BUILD_ENVIRONMENT={build_env}")
     print_to_stderr(f"test-times lookup key={job_name}, test_config={test_config}")
-    if test_config in test_times_file.get(job_name, {}):
-        print_to_stderr("Found test times from artifacts")
-        return test_times_file[job_name][test_config]
-    elif test_config in test_times_file["default"]:
+    for key in get_test_times_lookup_keys(job_name):
+        if test_config in test_times_file.get(key, {}):
+            print_to_stderr(f"Found test times from artifacts for {key}")
+            return test_times_file[key][test_config]
+    if test_config in test_times_file["default"]:
         print_to_stderr(
             f"::warning:: Gathered no stats from artifacts for {job_name} build env"
             f" and {test_config} test config. Using default job name and {test_config} test config instead."

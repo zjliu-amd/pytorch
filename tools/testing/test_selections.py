@@ -326,3 +326,21 @@ JOB_BASE_NAME_RE = re.compile(r" / test(?:-osdc)? \(")
 
 def get_job_base_name(job_name: str) -> str:
     return JOB_BASE_NAME_RE.split(job_name, maxsplit=1)[0]
+
+
+# Build-env variants that tools/torchci does not gather into test-times.json
+# (it only records jobs from the main CI workflows), e.g.
+# "linux-noble-rocm-preview-py3.11-mi350". They run the same test configs as the
+# build env without the variant tag, whose stats are a far better estimate than
+# the cross-platform "default" average.
+UNTRACKED_BUILD_ENV_VARIANT_RE = re.compile(r"-preview(?=-|$)")
+
+
+def get_test_times_lookup_keys(job_name: str | None) -> list[str | None]:
+    """Keys to try, in order, when looking up a job in test-times.json."""
+    keys: list[str | None] = [job_name]
+    if job_name:
+        base_name = UNTRACKED_BUILD_ENV_VARIANT_RE.sub("", job_name)
+        if base_name != job_name:
+            keys.append(base_name)
+    return keys
