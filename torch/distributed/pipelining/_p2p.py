@@ -354,9 +354,13 @@ def _preconnect_shared_p2p_edges(
     """Preconnect every physical peer pair used by the shared parent group.
 
     The schedule's parent all-reduce initializes the communicator used by
-    batched P2P. A lazy native backend selects separate bidirectional pair
-    channels for raw P2P, so one canonical exchange initializes each physical
-    pair before pipeline execution or CUDA-graph capture.
+    batched P2P, but NCCL/RCCL connect each send/receive direction of a peer
+    pair lazily on first use. A pipeline can send in both directions over one
+    physical pair (e.g. interleaved stages ``(0, 1, 0, 1)`` send ``1 -> 0``),
+    so each pair exchanges once in each direction, lower to higher and then
+    higher to lower. Otherwise the reverse direction would first be connected
+    during pipeline execution or CUDA-graph capture, while device work may
+    already be blocked on in-flight P2P.
 
     Args:
         parent: Shared pipeline process group.
@@ -376,20 +380,15 @@ def _preconnect_shared_p2p_edges(
         local_pair = next((pair for pair in matching if group_rank in pair), None)
         if local_pair is not None:
             lower_rank, higher_rank = local_pair
-            if group_rank == lower_rank:
-                work = dist.isend(
-                    payload,
-                    group=parent,
-                    group_dst=higher_rank,
-                )
-            else:
-                work = dist.irecv(
-                    payload,
-                    group=parent,
-                    group_src=lower_rank,
-                )
-            if work is not None:
-                work.wait()
+            peer = higher_rank if group_rank == lower_rank else lower_rank
+            # Finish each direction before the next so both can reuse payload.
+            for source in (lower_rank, higher_rank):
+                if group_rank == source:
+                    work = dist.isend(payload, group=parent, group_dst=peer)
+                else:
+                    work = dist.irecv(payload, group=parent, group_src=peer)
+                if work is not None:
+                    work.wait()
 
         # A rank not in this matching must not enter a later raw-P2P round
         # while peers are still selecting their current pair channel.

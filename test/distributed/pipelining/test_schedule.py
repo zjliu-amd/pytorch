@@ -232,39 +232,79 @@ class P2PInitializationTest(TestCase):
             (((0, 1),), ((1, 0),)),
         )
 
-    def test_shared_preconnect_exercises_each_physical_pair_once(self):
+    def _run_shared_preconnect(self, group_rank, stage_to_rank, group_size):
+        """Run shared preconnect as ``group_rank`` and record its P2P ops."""
         parent = MagicMock()
-        works = [MagicMock(), MagicMock()]
+        ops = []
+        works = []
+
+        def record(kind, peer_kwarg):
+            def op(tensor, *, group, **kwargs):
+                self.assertIs(group, parent)
+                ops.append((kind, kwargs[peer_kwarg]))
+                works.append(MagicMock())
+                return works[-1]
+
+            return op
+
         with (
             patch(
                 "torch.distributed.pipelining._p2p.dist.get_world_size",
-                return_value=4,
+                return_value=group_size,
             ),
             patch(
                 "torch.distributed.pipelining._p2p.dist.get_rank",
-                return_value=0,
+                return_value=group_rank,
             ),
             patch(
                 "torch.distributed.pipelining._p2p.dist.isend",
-                side_effect=works,
-            ) as isend,
+                side_effect=record("send", "group_dst"),
+            ),
+            patch(
+                "torch.distributed.pipelining._p2p.dist.irecv",
+                side_effect=record("recv", "group_src"),
+            ),
             patch("torch.distributed.pipelining._p2p.dist.all_reduce") as sync,
         ):
             _preconnect_shared_p2p_edges(
                 parent,
-                dict(enumerate((0, 1, 2, 3, 0, 1, 2, 3))),
+                dict(enumerate(stage_to_rank)),
                 torch.device("cpu"),
             )
 
-        self.assertEqual(
-            [call.kwargs["group_dst"] for call in isend.call_args_list],
-            [1, 3],
-        )
-        self.assertTrue(
-            all(call.kwargs["group"] is parent for call in isend.call_args_list)
-        )
         self.assertTrue(all(work.wait.call_count == 1 for work in works))
-        self.assertEqual(sync.call_count, 2)
+        return ops, sync.call_count
+
+    def test_shared_preconnect_exercises_both_directions_of_each_pair(self):
+        # PP4/VPP2 has physical pairs ((0, 1), (2, 3)) then ((0, 3), (1, 2)).
+        # NCCL connects each direction of a pair lazily on first use, so each
+        # pair must exchange lower -> higher and then higher -> lower.
+        expected_ops = {
+            0: [("send", 1), ("recv", 1), ("send", 3), ("recv", 3)],
+            1: [("recv", 0), ("send", 0), ("send", 2), ("recv", 2)],
+            3: [("recv", 2), ("send", 2), ("recv", 0), ("send", 0)],
+        }
+        for group_rank, expected in expected_ops.items():
+            with self.subTest(group_rank=group_rank):
+                ops, sync_count = self._run_shared_preconnect(
+                    group_rank, (0, 1, 2, 3, 0, 1, 2, 3), group_size=4
+                )
+                self.assertEqual(ops, expected)
+                self.assertEqual(sync_count, 2)
+
+    def test_shared_preconnect_warms_reverse_edge_of_interleaved_pair(self):
+        # Interleaved stages (0, 1, 0, 1) send stage 1 -> stage 2 from rank 1
+        # to rank 0, so the reverse direction must also be preconnected.
+        for group_rank, expected in (
+            (0, [("send", 1), ("recv", 1)]),
+            (1, [("recv", 0), ("send", 0)]),
+        ):
+            with self.subTest(group_rank=group_rank):
+                ops, sync_count = self._run_shared_preconnect(
+                    group_rank, (0, 1, 0, 1), group_size=2
+                )
+                self.assertEqual(ops, expected)
+                self.assertEqual(sync_count, 1)
 
     def test_v_assignment_excludes_same_rank_turn_and_wraparound(self):
         assignment = _stage_rank_assignment(
