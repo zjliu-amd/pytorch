@@ -639,6 +639,26 @@ def get_caching_autotuner_plugins(
     return plugins
 
 
+# Device index that a None (compile-on-one-rank) device resolves to while a kernel is
+# compiled in an Inductor compile worker. The parent resolves it (AsyncCompile.triton)
+# and forwards it, because the worker must not ask the GPU runtime itself: a forked
+# worker's parent has already initialized the runtime, so the query would raise
+# "Cannot re-initialize CUDA in forked subprocess", and a thread worker's current
+# device is not the parent thread's.
+_compile_worker_load_device: contextvars.ContextVar[int | None] = (
+    contextvars.ContextVar("_compile_worker_load_device", default=None)
+)
+
+
+@contextlib.contextmanager
+def compile_worker_load_device(device: int | None) -> Generator[None, None, None]:
+    token = _compile_worker_load_device.set(device)
+    try:
+        yield
+    finally:
+        _compile_worker_load_device.reset(token)
+
+
 def _resolve_load_device(device: int | None, device_type: str) -> int | None:
     # compile-on-one-rank: a None device is the rank-agnostic marker; resolve it to the
     # current device at load time so a shared kernel's cubin loads on the running rank's
@@ -647,6 +667,8 @@ def _resolve_load_device(device: int | None, device_type: str) -> int | None:
     # exchange_device, which CPU does not implement -- so leave CPU as-is.
     if device is not None or device_type == "cpu":
         return device
+    if (worker_device := _compile_worker_load_device.get()) is not None:
+        return worker_device
     from torch._dynamo.device_interface import get_interface_for_device
 
     return get_interface_for_device(device_type.replace("hip", "cuda")).current_device()

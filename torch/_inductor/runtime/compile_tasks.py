@@ -202,7 +202,12 @@ def _worker_compile_triton(
     load_kernel: Callable[[], CachingAutotuner],
     extra_env: dict[str, str | None],
     extra_config: dict[str, Any],
+    load_device: int | None = None,
 ) -> tuple[CachingAutotuner, int]:
+    """
+    load_device: the parent's resolution of a None (compile-on-one-rank) kernel
+    device; see triton_heuristics._compile_worker_load_device.
+    """
     _set_triton_ptxas_path()
     _apply_subprocess_env_and_clear_caches(extra_env)
     # Keep Triton's in-process knob in sync with the parent environment, including
@@ -217,8 +222,9 @@ def _worker_compile_triton(
     from torch._inductor import config
     from torch._inductor.compile_worker import watchdog
     from torch._inductor.runtime import triton_helpers
+    from torch._inductor.runtime.triton_heuristics import compile_worker_load_device
 
-    with config.patch(extra_config):
+    with config.patch(extra_config), compile_worker_load_device(load_device):
         fail = None
         try:
             start_ns = time.time_ns()
@@ -244,6 +250,7 @@ def _worker_compile_triton_thread(
     load_kernel: Callable[[], CachingAutotuner],
     extra_env: dict[str, str | None],
     extra_config: dict[str, Any],
+    load_device: int | None = None,
 ) -> tuple[CachingAutotuner, int]:
     """
     Thread-mode worker for Triton compilation (nogil).
@@ -275,8 +282,9 @@ def _worker_compile_triton_thread(
                 pass
 
     from torch._inductor import config
+    from torch._inductor.runtime.triton_heuristics import compile_worker_load_device
 
-    with config.patch(extra_config):
+    with config.patch(extra_config), compile_worker_load_device(load_device):
         fail = None
         try:
             start_ns = time.time_ns()

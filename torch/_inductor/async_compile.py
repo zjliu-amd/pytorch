@@ -641,11 +641,22 @@ class AsyncCompile:
                 else _worker_compile_triton
             )
 
+            # compile_on_one_rank kernels carry no device index. Resolve it here: the
+            # worker must not query the GPU runtime (see _compile_worker_load_device).
+            from torch.fx.experimental.proxy_tensor import _coor_enabled
+
+            load_device = (
+                torch.accelerator.current_device_index()
+                if _coor_enabled() and torch.accelerator.is_available()
+                else None
+            )
+
             task = pool.submit(
                 worker_fn,
                 load_kernel,
                 extra_env,
                 extra_config,
+                load_device,
             )
 
             def get_result() -> CachingAutotuner:

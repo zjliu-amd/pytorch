@@ -375,6 +375,43 @@ def test_flydsl_loader_main(value, stream):
 
     @requires_gpu()
     @requires_triton()
+    @skipIfWindows(msg="fork is not available on Windows")
+    @parametrize("method", ("subprocess", "fork"))
+    def test_compile_on_one_rank_forked_worker(self, method):
+        # compile_on_one_rank kernels carry no device index. With TRITON_CACHE_DIR
+        # unset, the worker used to resolve it with current_device(), which raises
+        # "Cannot re-initialize CUDA in forked subprocess" because the GPU runtime
+        # was initialized before the workers were forked.
+        import torch.compiler.config as compiler_config
+
+        def fn(x, y):
+            return x.sin() + y
+
+        x = torch.rand(10, device=GPU_TYPE)
+        y = torch.rand(10, device=GPU_TYPE)
+        device = torch.accelerator.current_device_index()
+
+        with (
+            config.patch(worker_start_method=method, compile_threads=2),
+            compiler_config.patch(compile_on_one_rank=True),
+        ):
+            shutdown_compile_workers()
+            # The first kernel must go to the pool, not compile in this process.
+            AsyncCompile.wait_pool_ready()
+            try:
+                with fresh_cache(), patch.dict(os.environ):
+                    os.environ.pop("TRITON_CACHE_DIR", None)
+                    self.assertEqual(torch.compile(fn)(x, y), fn(x, y))
+                    # Kernels keep the per-device Triton cache layout.
+                    triton_dir = os.path.join(
+                        os.environ["TORCHINDUCTOR_CACHE_DIR"], "triton"
+                    )
+                    self.assertEqual(os.listdir(triton_dir), [str(device)])
+            finally:
+                shutdown_compile_workers()
+
+    @requires_gpu()
+    @requires_triton()
     def test_bad_kernel(self):
         shutdown_compile_workers()
 

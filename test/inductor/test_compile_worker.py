@@ -1505,6 +1505,7 @@ class TestSetTritonLibdevicePath(TestCase):
         )
 
 
+@instantiate_parametrized_tests
 class TestTritonCompileWorker(TestCase):
     @unittest.skipIf(not HAS_TRITON, "requires triton")
     def test_worker_compile_triton_warm_cache_skips_gpu_driver_setup(self):
@@ -1567,6 +1568,43 @@ class TestTritonCompileWorker(TestCase):
             # The skip is restored even if worker compilation raises.
             with self.assertRaisesRegex(RuntimeError, "0 active drivers"):
                 triton_helpers.set_driver_to_gpu()
+
+    @unittest.skipIf(not HAS_TRITON, "requires triton")
+    @parametrize("thread_worker", (False, True))
+    def test_worker_compile_triton_resolves_none_device_from_parent(
+        self, thread_worker
+    ):
+        # A compile_on_one_rank kernel has no device index. The worker must use the
+        # device the parent resolved instead of asking the GPU runtime, which a
+        # forked worker cannot initialize.
+        from torch._inductor.runtime import compile_tasks
+        from torch._inductor.runtime.triton_heuristics import _resolve_load_device
+
+        worker_fn = (
+            compile_tasks._worker_compile_triton_thread
+            if thread_worker
+            else compile_tasks._worker_compile_triton
+        )
+
+        class FakeKernel:
+            def precompile(self, warm_cache_only=False):
+                self.load_device = _resolve_load_device(None, "cuda")
+
+            def prepare_for_pickle(self):
+                pass
+
+        def no_gpu_runtime(device_type):
+            raise RuntimeError("Cannot re-initialize CUDA in forked subprocess")
+
+        with patch(
+            "torch._dynamo.device_interface.get_interface_for_device",
+            no_gpu_runtime,
+        ):
+            kernel, _ = worker_fn(FakeKernel, {}, {}, 3)
+            self.assertEqual(kernel.load_device, 3)
+            # The parent's device is scoped to the worker call.
+            with self.assertRaisesRegex(RuntimeError, "re-initialize"):
+                _resolve_load_device(None, "cuda")
 
 
 if __name__ == "__main__":
