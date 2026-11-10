@@ -1043,6 +1043,61 @@ class RecompileTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(result, x + box["cls"].bias)
         self.assertEqual(cnt.frame_count, 2)
 
+    def test_stale_cache_entry_wrapper_not_reused(self):
+        # guard_manager.cache_entry (and the convert_frame callback argument) are
+        # non-owning _CacheEntry wrappers that Python can keep alive after the
+        # entry is freed. A new CacheEntry placed at the freed address must get a
+        # fresh wrapper: pybind11 otherwise hands back the stale one, and for the
+        # temporary copies made by _get_cache_entries_for_region that leaves
+        # Dynamo reading freed memory. Only identities of the stale wrappers are
+        # compared, so a regression fails here instead of crashing.
+        import torch._dynamo.convert_frame as convert_frame
+        from torch._dynamo.eval_frame import _debug_get_cache_entry_list
+
+        stale = {}
+        aliased = []
+        get_cache_entries_for_region = convert_frame._get_cache_entries_for_region
+
+        def drop_stale(entries):
+            # Filter stale wrappers out so Dynamo never dereferences them.
+            aliased.extend(id(e) for e in entries if stale.get(id(e)) is e)
+            return [e for e in entries if stale.get(id(e)) is not e]
+
+        def checked_get_cache_entries_for_region(code, isolate_recompiles_id):
+            return drop_stale(get_cache_entries_for_region(code, isolate_recompiles_id))
+
+        def fn(x):
+            return x + 1
+
+        with (
+            dc.patch(recompile_limit=64),
+            patch.object(
+                convert_frame,
+                "_get_cache_entries_for_region",
+                checked_get_cache_entries_for_region,
+            ),
+        ):
+            for rnd in range(4):
+                fns = [
+                    type(fn)(fn.__code__.replace(co_name=f"fn_{rnd}_{i}"), globals())
+                    for i in range(25)
+                ]
+                for f in fns:
+                    opt_f = torch.compile(f, backend="eager", dynamic=False)
+                    for n in range(1, 4):
+                        opt_f(torch.randn(n))
+                for f in fns:
+                    for e in drop_stale(_debug_get_cache_entry_list(f.__code__)):
+                        wrapper = e.guard_manager.cache_entry
+                        if stale.get(id(wrapper)) is wrapper:
+                            aliased.append(id(wrapper))
+                        stale[id(wrapper)] = wrapper
+                # Frees every CacheEntry; the wrappers in `stale` stay alive.
+                torch._dynamo.reset()
+
+        self.assertGreater(len(stale), 0)
+        self.assertEqual(aliased, [])
+
     @parametrize("mutation", ("code", "rebind"))
     @parametrize("inherited", (False, True))
     def test_class_function_attr_mutation_recompiles(self, inherited, mutation):

@@ -5,6 +5,7 @@
 #include <torch/csrc/dynamo/cache_entry.h>
 #include <torch/csrc/dynamo/extra_state.h>
 #include <torch/csrc/dynamo/guards.h>
+#include <torch/csrc/jit/python/pybind_utils.h>
 #include <torch/csrc/utils/pythoncapi_compat.h>
 
 CacheEntry::CacheEntry(const py::handle& guarded_code, PyObject* backend)
@@ -32,6 +33,11 @@ CacheEntry::~CacheEntry() {
   if (this->_owner == nullptr) {
     return;
   }
+  // Python may keep non-owning wrappers of this entry alive (e.g.
+  // guard_manager.cache_entry). Unregister them so a CacheEntry later created
+  // at this address is not cast to a stale wrapper. Copies (_owner == nullptr)
+  // only reach Python as owning wrappers, which pybind11 unregisters itself.
+  torch::jit::clear_registered_instances(this);
   // prevent guard_manager from use-after-free when invalidating
   this->guard_manager.attr("cache_entry") = py::none();
   this->guard_manager.attr("extra_state") = py::none();
