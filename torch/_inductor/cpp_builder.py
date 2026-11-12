@@ -791,11 +791,33 @@ def _remove_dir(path_dir: str) -> None:
         os.rmdir(path_dir)
 
 
+def _snapshot_environ() -> dict[str, str]:
+    # Another thread may change os.environ while we copy it. The copy reads the
+    # keys first and then each value, so a key removed in between raises
+    # KeyError. Retry until the copy succeeds.
+    while True:
+        try:
+            return os.environ.copy()
+        except (KeyError, RuntimeError):
+            continue
+
+
 def _run_compile_cmd(cmd_line: str, cwd: str) -> None:
     cmd = shlex.split(cmd_line)
     try:
+        # Pass an explicit copy of the environment. Compiles run on worker
+        # threads. With env=None the child process execs with the live C
+        # `environ`. If another thread adds a key at that moment, setenv() can
+        # move and free that array, so the compiler starts with a corrupt
+        # environment (for example, without PATH). With an explicit env,
+        # subprocess builds a private envp before fork.
         subprocess.run(
-            cmd, cwd=cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+            cmd,
+            cwd=cwd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=_snapshot_environ(),
         )
     except subprocess.CalledProcessError as e:
         output = e.stdout.decode(*SUBPROCESS_DECODE_ARGS)

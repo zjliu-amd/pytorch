@@ -2,6 +2,9 @@
 
 import ntpath
 import os
+import shlex
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -18,6 +21,7 @@ from torch._inductor.test_case import run_tests, TestCase
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     IS_LINUX,
+    IS_WINDOWS,
     parametrize,
     subtest,
 )
@@ -376,6 +380,42 @@ class TestCppBuilder(TestCase):
         self.assertEqual(cflags, [])
         self.assertEqual(libraries, [])
         self.assertEqual(passthrough, [])
+
+    @unittest.skipIf(IS_WINDOWS, "builds a POSIX shell command line")
+    def test_run_compile_cmd_passes_environment_snapshot(self) -> None:
+        # Compiles run on worker threads while the main thread may write
+        # os.environ (for example, codecache sets
+        # _TORCHINDUCTOR_PYOBJECT_TENSOR_DATA_PTR on each load). The compiler
+        # must get a copy of the environment taken before the process starts.
+        # It must not inherit the live process environment, which a write on
+        # another thread can reallocate during exec.
+        key = "_TORCHINDUCTOR_TEST_CONCURRENT_ENV_WRITE"
+        real_run = subprocess.run
+
+        def run_with_concurrent_env_write(*args, **kwargs):
+            # Another thread adds a key after the compile has started.
+            os.environ[key] = "1"
+            return real_run(*args, **kwargs)
+
+        # The child process exits with status 1 if it sees the new key.
+        code = f"import os, sys; sys.exit({key!r} in os.environ)"
+        cmd_line = shlex.join([sys.executable, "-c", code])
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch.object(
+                cpp_builder.subprocess,
+                "run",
+                side_effect=run_with_concurrent_env_write,
+            ) as run,
+            tempfile.TemporaryDirectory() as cwd,
+        ):
+            os.environ.pop(key, None)
+            cpp_builder._run_compile_cmd(cmd_line, cwd)
+            self.assertIn(key, os.environ)
+
+        env = run.call_args.kwargs.get("env")
+        self.assertIsInstance(env, dict)
+        self.assertNotIn(key, env)
 
     @unittest.skipUnless(IS_LINUX, "--as-needed is an ELF linker flag")
     def test_libtorch_free_aot_link_drops_unused_libraries(self) -> None:
