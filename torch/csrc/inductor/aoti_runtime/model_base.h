@@ -373,13 +373,17 @@ inline size_t pinnedAsyncConstantsCopyCpuThreads();
 
 // S646785: env-gated logging for the AOTI constant-load pipeline. Emits when
 // the AOTI_LOG_LOADING env var is set so [AOTI_LOAD] markers are greppable in
-// trainer logs without rebuilding.
-#define AOTI_LOG_LOADING(msg)                                                  \
-  do {                                                                         \
-    static const bool _aoti_log_ = std::getenv("AOTI_LOG_LOADING") != nullptr; \
-    if (_aoti_log_) {                                                          \
-      std::cerr << "[AOTI_LOAD] " << msg << '\n';                              \
-    }                                                                          \
+// trainer logs without rebuilding. The env var is read on every call rather
+// than cached in a function-local static: this header is compiled into every
+// AOTI model .so, and a static local in an inline or template function (e.g.
+// load_constants) becomes an STB_GNU_UNIQUE symbol that glibc binds to the
+// first-loaded model, so a cached value would be latched by whichever model
+// loaded first in the process. The call sites are on load paths, not hot ones.
+#define AOTI_LOG_LOADING(msg)                         \
+  do {                                                \
+    if (std::getenv("AOTI_LOG_LOADING") != nullptr) { \
+      std::cerr << "[AOTI_LOAD] " << msg << '\n';     \
+    }                                                 \
   } while (0)
 
 namespace {
@@ -1353,9 +1357,14 @@ inline bool usePinnedAsyncConstantsCopy() {
     return setting == 1;
   }
 #ifdef USE_CUDA
-  // Only the env var is latched; setUsePinnedAsyncConstantsCopy() is checked
-  // above on every call and overrides it, including the ROCm default.
-  static const bool enabled_from_env = [] {
+  // setUsePinnedAsyncConstantsCopy() is checked above and overrides the env
+  // var, including the ROCm default. The env var is read on every call (only
+  // constant-load and update paths call this) and is deliberately not cached
+  // in a function-local static: this header is compiled into every AOTI model
+  // .so, and such a static in an inline function becomes an STB_GNU_UNIQUE
+  // symbol shared by all loaded models, so the first model loaded in the
+  // process would fix the value for every later one.
+  const bool enabled_from_env = [] {
     const char* env = std::getenv("AOTI_COPY_USE_PINNED_ASYNC");
 #ifdef USE_ROCM
     // On by default on ROCm, where an unset or empty value counts as unset. A

@@ -917,6 +917,45 @@ class AOTInductorTestsTemplate:
         self.assertNotIn("PinnedStagingPool: allocated", loading_log)
         self.assertEqual(optimized(*example_inputs), model(*example_inputs))
 
+    @unittest.skipIf(
+        not HAS_GPU or GPU_TYPE != "cuda",
+        "Pinned async constant copy is CUDA/ROCm-only",
+    )
+    def test_constants_load_env_read_per_load(self):
+        # AOTI_COPY_USE_PINNED_ASYNC and AOTI_LOG_LOADING are read by code that
+        # is compiled into every model .so. They must be honored on each load,
+        # not latched process-wide by whichever model was loaded first.
+        if self.device != "cuda":
+            raise unittest.SkipTest("requires CUDA or ROCm")
+        model, example_inputs, package_path = _compile_model_with_constants(self.device)
+        expected = model(*example_inputs)
+
+        def load(env, unset=()):
+            with patch.dict(os.environ, env):
+                for name in unset:
+                    os.environ.pop(name, None)
+                return _load_package_capturing_stderr(package_path)
+
+        first, first_log = load(
+            {"AOTI_COPY_USE_PINNED_ASYNC": "1"}, unset=("AOTI_LOG_LOADING",)
+        )
+        self.assertNotIn("[AOTI_LOAD]", first_log)
+
+        second, second_log = load(
+            {"AOTI_COPY_USE_PINNED_ASYNC": "0", "AOTI_LOG_LOADING": "1"}
+        )
+        self.assertIn("load_constants: starting H2D copy", second_log)
+        self.assertNotIn("PinnedStagingPool: allocated", second_log)
+
+        third, third_log = load(
+            {"AOTI_COPY_USE_PINNED_ASYNC": "1", "AOTI_LOG_LOADING": "1"}
+        )
+        self.assertIn("load_constants: starting H2D copy", third_log)
+        self.assertIn("PinnedStagingPool: allocated", third_log)
+
+        for optimized in (first, second, third):
+            self.assertEqual(optimized(*example_inputs), expected)
+
     def test_output_path_1(self):
         class Model(torch.nn.Module):
             def __init__(self) -> None:
