@@ -374,10 +374,12 @@ inline size_t pinnedAsyncConstantsCopyCpuThreads();
 // S646785: env-gated logging for the AOTI constant-load pipeline. Emits when
 // the AOTI_LOG_LOADING env var is set so [AOTI_LOAD] markers are greppable in
 // trainer logs without rebuilding.
+// Not cached in a static: outside the anonymous namespace a function-local
+// static is STB_GNU_UNIQUE, so the first model .so loaded in the process would
+// fix it for every later one.
 #define AOTI_LOG_LOADING(msg)                                                  \
   do {                                                                         \
-    static const bool _aoti_log_ = std::getenv("AOTI_LOG_LOADING") != nullptr; \
-    if (_aoti_log_) {                                                          \
+    if (std::getenv("AOTI_LOG_LOADING") != nullptr) {                          \
       std::cerr << "[AOTI_LOAD] " << msg << '\n';                              \
     }                                                                          \
   } while (0)
@@ -1353,23 +1355,21 @@ inline bool usePinnedAsyncConstantsCopy() {
     return setting == 1;
   }
 #ifdef USE_CUDA
-  // Only the env var is latched; setUsePinnedAsyncConstantsCopy() is checked
-  // above on every call and overrides it, including the ROCm default.
-  static const bool enabled_from_env = [] {
-    const char* env = std::getenv("AOTI_COPY_USE_PINNED_ASYNC");
+  // setUsePinnedAsyncConstantsCopy() above overrides the env var, including
+  // the ROCm default. The env var is read per call (once per constant load or
+  // update), not cached in a static, for the reason given at AOTI_LOG_LOADING.
+  const char* env = std::getenv("AOTI_COPY_USE_PINNED_ASYNC");
 #ifdef USE_ROCM
-    // On by default on ROCm, where an unset or empty value counts as unset. A
-    // large pageable copy out of the .so's read-only constant pages makes ROCm
-    // try to pin those pages; on MI300X the pinning fails thousands of times
-    // per container and creating a container took 40-50 s instead of 0.5 s
-    // with the staged copy. AOTI_COPY_USE_PINNED_ASYNC=0 turns it off.
-    if (env == nullptr || env[0] == '\0') {
-      return true;
-    }
+  // On by default on ROCm, where an unset or empty value counts as unset. A
+  // large pageable copy out of the .so's read-only constant pages makes ROCm
+  // try to pin those pages; on MI300X the pinning fails thousands of times
+  // per container and creating a container took 40-50 s instead of 0.5 s
+  // with the staged copy. AOTI_COPY_USE_PINNED_ASYNC=0 turns it off.
+  if (env == nullptr || env[0] == '\0') {
+    return true;
+  }
 #endif
-    return envFlagIsEnabled(env);
-  }();
-  return enabled_from_env;
+  return envFlagIsEnabled(env);
 #else
   return false;
 #endif

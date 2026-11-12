@@ -917,6 +917,52 @@ class AOTInductorTestsTemplate:
         self.assertNotIn("PinnedStagingPool: allocated", loading_log)
         self.assertEqual(optimized(*example_inputs), model(*example_inputs))
 
+    @unittest.skipIf(
+        not HAS_GPU or GPU_TYPE != "cuda",
+        "Pinned async constant copy is CUDA/ROCm-only",
+    )
+    @patch.dict(os.environ, {})
+    def test_constants_loading_env_read_per_load(self):
+        # AOTI_LOG_LOADING and AOTI_COPY_USE_PINNED_ASYNC must be honored by
+        # every model load, not latched by the first model loaded in the
+        # process: the runtime header's externally-linked function-local
+        # statics are shared by every model .so (STB_GNU_UNIQUE).
+        if self.device != "cuda":
+            raise unittest.SkipTest("requires CUDA or ROCm")
+        model, example_inputs, package_path = _compile_model_with_constants(self.device)
+        expected = model(*example_inputs)
+
+        def load_with_env(log_loading, pinned_async):
+            for name, value in (
+                ("AOTI_LOG_LOADING", log_loading),
+                ("AOTI_COPY_USE_PINNED_ASYNC", pinned_async),
+            ):
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            optimized, log = _load_package_capturing_stderr(package_path)
+            self.assertEqual(optimized(*example_inputs), expected)
+            return log
+
+        # Both unset first: with the latch, this load fixes both settings for
+        # every later load in the process.
+        self.assertNotIn("[AOTI_LOAD]", load_with_env(None, None))
+
+        log = load_with_env("1", "0")
+        self.assertIn("load_constants: starting H2D copy", log)
+        self.assertNotIn("PinnedStagingPool: allocated", log)
+
+        log = load_with_env("1", "1")
+        self.assertIn("load_constants: starting H2D copy", log)
+        self.assertIn("PinnedStagingPool: allocated", log)
+
+        self.assertNotIn("[AOTI_LOAD]", load_with_env(None, "1"))
+
+        log = load_with_env("1", "0")
+        self.assertIn("load_constants: starting H2D copy", log)
+        self.assertNotIn("PinnedStagingPool: allocated", log)
+
     def test_output_path_1(self):
         class Model(torch.nn.Module):
             def __init__(self) -> None:
