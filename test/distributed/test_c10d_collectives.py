@@ -602,8 +602,11 @@ class AbstractCollectivesTest(CollectivesTestMixin, C10dBackendTestContinuous):
                 # Only wait() orders the current stream after side-stream ops.
                 # Check before the peers run, so a wrong wait can never clear,
                 # and poll: the backend may have just recorded an event on the
-                # current stream.
-                if stream is not None:
+                # current stream. Skipped on ROCm: HIP multiplexes streams onto
+                # a few hardware queues (GPU_MAX_HW_QUEUES), so an event recorded
+                # on the current stream can sit behind a window kernel that
+                # waits for the peers, and query() stays False until they run.
+                if stream is not None and not torch.version.hip:
                     deadline = time.monotonic() + 1
                     while not current.query() and time.monotonic() < deadline:
                         pass
