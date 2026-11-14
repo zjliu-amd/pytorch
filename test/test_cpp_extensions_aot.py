@@ -144,6 +144,24 @@ class TestCppExtensionAOTDevice(common.TestCase):
 class TestCppExtensionAOTCUDA(common.TestCase):
     hw_classification = HardwareClassification.CUDA
 
+    @unittest.skipIf(not TEST_CUDA, "CUDA not found")
+    def test_sigmoid_add_extension_on_side_stream(self):
+        # Side streams do not sync with the legacy default stream. The sleep
+        # delays the output's zero-fill, so a kernel launched on the default
+        # stream instead of the current stream would have its result
+        # overwritten.
+        from torch_test_cpp_extension import cuda as cuda_extension
+
+        x = torch.zeros(100, device="cuda", dtype=torch.float32)
+        y = torch.zeros(100, device="cuda", dtype=torch.float32)
+        torch.cuda.synchronize()
+        stream = torch.cuda.Stream()
+        with torch.cuda.stream(stream):
+            torch.cuda._sleep(100_000_000)
+            z = cuda_extension.sigmoid_add(x, y).cpu()
+        # 2 * sigmoid(0) = 2 * 0.5 = 1
+        self.assertEqual(z, torch.ones_like(z))
+
     @unittest.skipIf(common.IS_WINDOWS, "Windows not supported")
     @unittest.skipIf(not TEST_CUDA, "CUDA not found")
     def test_cublas_extension(self):

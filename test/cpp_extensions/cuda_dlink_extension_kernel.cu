@@ -1,6 +1,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAStream.h>
 
 #include <ATen/ATen.h>
 
@@ -17,6 +18,6 @@ __global__ void add_kernel(const float* a, const float* b, float* output, int si
 void add_cuda(const float* a, const float* b, float* output, int size) {
   const int threads = 1024;
   const int blocks = (size + threads - 1) / threads;
-  add_kernel<<<blocks, threads>>>(a, b, output, size);
+  add_kernel<<<blocks, threads, 0, c10::cuda::getCurrentCUDAStream()>>>(a, b, output, size);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
