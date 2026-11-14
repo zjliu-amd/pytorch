@@ -19946,8 +19946,11 @@ def forward(self, arg0_1: "Sym(s77)", arg1_1: "Sym(s27)", arg2_1: "Sym(s53)", ar
                         nonlocal inp_refs
                         nonlocal matmul_seen
 
-                        gc.collect()
                         if func is aten.mm.out:
+                            # Only collect where the refs are checked: a
+                            # collect on every dispatched op is very slow when
+                            # pointwise autotuning benchmarks inside this mode.
+                            gc.collect()
                             matmul_seen = True
                             if len(inps) != 0:
                                 raise AssertionError(
