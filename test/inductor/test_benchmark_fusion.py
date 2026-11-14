@@ -626,17 +626,41 @@ if HAS_GPU_AND_TRITON:
             self.assertTrue(decline.calls)
             self.assertTrue(all(call.epilogue for call in decline.calls))
 
+        @staticmethod
+        def _pinned_benchmarks(fused_ms):
+            """Pins the scheduler's fusion benchmarks: the relu epilogue takes
+            1.0 ms and the fused template kernel ``fused_ms``, so the benchmark
+            path fuses iff ``fused_ms`` < template time + 1.0. Real timings of
+            a 256x256 mm and relu are within benchmark noise."""
+            stack = contextlib.ExitStack()
+            for name, ms in (
+                ("benchmark_fused_nodes", 1.0),
+                ("benchmark_codegened_module", fused_ms),
+            ):
+                stack.enter_context(
+                    unittest.mock.patch.object(
+                        Scheduler, name, lambda *args, _ms=ms: (_ms, "")
+                    )
+                )
+            return stack
+
         @fresh_cache()
         def test_a_hook_returning_none_keeps_the_default_decision(self):
             args = (self._fp16(256, 256), self._fp16(256, 256))
-            default = self.compile(self._mm_relu, *args)
-            consulted = RecordingFusionChoices()
-            code = self.compile(self._mm_relu, *args, choices=consulted)
-            self.assertTrue(consulted.calls)
-            # The benchmark path fuses the relu, as without an override.
-            for out in (default, code):
-                self.assert_kernels(out, 1)
-                FileCheck().check("triton_tem_fused_mm_relu").run(out)
+            # (fused kernel time, kernels and epilogue kernel of the default)
+            for fused_ms, count, kernel in (
+                (1.0, 1, "triton_tem_fused_mm_relu"),
+                (10.0, 2, "triton_poi_fused_relu"),
+            ):
+                with self._pinned_benchmarks(fused_ms):
+                    default = self.compile(self._mm_relu, *args)
+                    consulted = RecordingFusionChoices()
+                    code = self.compile(self._mm_relu, *args, choices=consulted)
+                self.assertTrue(consulted.calls)
+                # The benchmark path decides, as without an override.
+                for out in (default, code):
+                    self.assert_kernels(out, count)
+                    FileCheck().check(kernel).run(out)
 
         @fresh_cache()
         def test_a_producer_fuses_with_the_chosen_template(self):
