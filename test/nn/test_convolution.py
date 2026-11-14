@@ -4247,7 +4247,15 @@ class TestConvolutionNNCUDA(NNTestCase):
         x = x.contiguous(memory_format=torch.contiguous_format)
         out_c = conv(x, weight)
         self.assertTrue(out_c.is_contiguous(memory_format=torch.contiguous_format))
-        self.assertEqual(out_c, out_nhwc)
+        # The two memory formats may run different conv algorithms (e.g. MIOpen
+        # Winograd for NCHW vs implicit GEMM for NHWC), whose fp32 rounding
+        # errors differ by more than the default tolerance.
+        self.assertEqual(
+            out_c,
+            out_nhwc,
+            atol=max(self.precision, 5e-5),
+            rtol=max(self.rel_tol, 1e-5),
+        )
         self.assertEqual(weight.stride(), weight_stride)
 
     @skipCUDAIfNoCudnn
