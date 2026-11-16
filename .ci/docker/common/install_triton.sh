@@ -104,6 +104,9 @@ fi
 # IMPORTANT: helion needs to be installed without dependencies.
 # It depends on torch and triton. We don't want to install
 # triton and torch from production on Docker CI images
+# Pinned to 1.5.2: helion 1.6.0 (pytorch/helion#4456) fails `import helion` on
+# Python 3.11 with "ValueError: mutable default <class 'mappingproxy'> for field
+# intervals is not allowed: use default_factory". Unpin once a fixed release ships.
 if [[ "$ANACONDA_PYTHON_VERSION" != 3.9* ]]; then
-  pip_install helion --no-deps
+  pip_install "helion==1.5.2" --no-deps
 fi
