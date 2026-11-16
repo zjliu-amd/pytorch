@@ -1493,6 +1493,32 @@ class TestTryImport(TestCase):
         self.assertIsNone(missing_module)
 
 
+class TestHelionProbe(TestCase):
+    def test_broken_helion_import_is_unavailable(self):
+        # An installed helion that raises a non-ImportError at import time
+        # (e.g. helion 1.6.0 on Python 3.11) must not crash the probe.
+        import torch.utils._helion as helion_utils
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = os.path.join(tmp, "helion")
+            os.mkdir(pkg)
+            with open(os.path.join(pkg, "__init__.py"), "w") as f:
+                f.write("raise ValueError('broken helion')\n")
+            saved = sys.modules.pop("helion", None)
+            helion_utils.has_helion_package.cache_clear()
+            helion_utils.has_helion.cache_clear()
+            try:
+                with mock.patch.object(sys, "path", [tmp, *sys.path]):
+                    with self.assertWarnsRegex(UserWarning, "broken helion"):
+                        self.assertFalse(helion_utils.has_helion())
+            finally:
+                sys.modules.pop("helion", None)
+                if saved is not None:
+                    sys.modules["helion"] = saved
+                helion_utils.has_helion_package.cache_clear()
+                helion_utils.has_helion.cache_clear()
+
+
 class TestUtilsInternal(TestCase):
     def test_max_clock_rate_uses_requested_device(self):
         properties = types.SimpleNamespace(clock_rate=1_980_000)
