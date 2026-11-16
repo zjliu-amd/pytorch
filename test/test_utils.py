@@ -1493,6 +1493,53 @@ class TestTryImport(TestCase):
         self.assertIsNone(missing_module)
 
 
+class TestHelionProbe(TestCase):
+    def _probe_with_import_error(self, exc):
+        import builtins
+
+        import torch.utils._helion as helion_utils
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "helion" or name.startswith("helion."):
+                raise exc
+            return real_import(name, *args, **kwargs)
+
+        def clear_caches():
+            helion_utils.has_helion_package.cache_clear()
+            helion_utils.has_helion.cache_clear()
+
+        clear_caches()
+        self.addCleanup(clear_caches)
+        with (
+            mock.patch.dict(sys.modules),
+            mock.patch("builtins.__import__", fake_import),
+            warnings.catch_warnings(record=True) as w,
+        ):
+            sys.modules.pop("helion", None)
+            warnings.simplefilter("always")
+            result = (helion_utils.has_helion_package(), helion_utils.has_helion())
+        return result, [str(x.message) for x in w]
+
+    def test_broken_helion_install_is_unavailable(self):
+        # e.g. helion 1.6.0 on Python 3.11 raises ValueError at import time
+        (has_pkg, has), msgs = self._probe_with_import_error(
+            ValueError("mutable default for field intervals is not allowed")
+        )
+        self.assertFalse(has_pkg)
+        self.assertFalse(has)
+        self.assertTrue(any("helion" in m and "ValueError" in m for m in msgs), msgs)
+
+    def test_missing_helion_is_unavailable_silently(self):
+        (has_pkg, has), msgs = self._probe_with_import_error(
+            ModuleNotFoundError("No module named 'helion'")
+        )
+        self.assertFalse(has_pkg)
+        self.assertFalse(has)
+        self.assertFalse(any("helion" in m for m in msgs), msgs)
+
+
 class TestUtilsInternal(TestCase):
     def test_max_clock_rate_uses_requested_device(self):
         properties = types.SimpleNamespace(clock_rate=1_980_000)
