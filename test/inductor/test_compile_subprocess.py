@@ -34,6 +34,7 @@ from torch.testing._internal.inductor_utils import (
     RUN_CPU,
     RUN_GPU,
 )
+from torch.testing._internal.logging_utils import logs_to_string
 
 
 if IS_WINDOWS and IS_CI:
@@ -270,6 +271,42 @@ class TestSubprocess(TestCase):
             self.assertGreater(_AsyncFxCompile._stat_eager_runs, 0)
             self.assertEqual(_AsyncFxCompile._stat_bg_started, 2)
             self.assertEqual(_AsyncFxCompile._stat_bg_finished, 2)
+
+    @torch._inductor.config.patch(fx_graph_cache=False)
+    def test_artifact_logging_enabled_after_worker_start(self):
+        # The compile worker is reused across compiles, so an artifact log
+        # enabled in the parent after the worker started must still be
+        # emitted by the worker and replayed in the parent.
+        @torch.compile(fullgraph=True, backend="inductor")
+        def warmup(x):
+            return x * 2
+
+        @torch.compile(fullgraph=True, backend="inductor")
+        def f(x):
+            return x + 1
+
+        @torch.compile(fullgraph=True, backend="inductor")
+        def g(x):
+            return x - 1
+
+        x = torch.randn(8)
+        warmup(x)
+
+        # post_grad_graphs is not off-by-default, so its logger always
+        # propagates.
+        log_stream, ctx = logs_to_string(
+            "torch._inductor.compile_fx", "post_grad_graphs"
+        )
+        with ctx():
+            f(x)
+        self.assertIn("torch.ops.aten.add.Tensor", log_stream.getvalue())
+
+        # ir_post_fusion is off-by-default, so its logger only propagates
+        # while it is enabled. Also check the record is replayed exactly once.
+        log_stream, ctx = logs_to_string("torch._inductor.debug", "ir_post_fusion")
+        with ctx():
+            g(x)
+        self.assertEqual(log_stream.getvalue().count("AFTER FUSION"), 1)
 
 
 if RUN_CPU:

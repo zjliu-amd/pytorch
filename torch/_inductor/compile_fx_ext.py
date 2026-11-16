@@ -314,6 +314,10 @@ class _LoggerState:
     """
 
     loggers: dict[str, int]
+    # Mapping from logger name to (level, propagate) for every torch._inductor
+    # logger (including propagating ones, such as torch._logging artifact
+    # loggers) so the child is configured the same way as the parent.
+    config: dict[str, tuple[int, bool]]
     # The actual log capturing mechanism - this should be None when we're not
     # actively capturing logs.
     captured_logs: _CapturedLogs | None = None
@@ -321,6 +325,7 @@ class _LoggerState:
     def __init__(self) -> None:
         # Mapping from logger name to level.
         self.loggers = {}
+        self.config = {}
 
         def filter(
             logger: logging.Logger | logging.PlaceHolder,
@@ -331,10 +336,14 @@ class _LoggerState:
             # We only want to track torch._inductor logging
             if not logger.name.startswith("torch._inductor"):
                 return False
-            # If this logger propagates then assume we'll track its parent
-            if logger.propagate:
-                return False
             return True
+
+        def track(logger: logging.Logger) -> None:
+            self.config[logger.name] = (logger.level, logger.propagate)
+            # If this logger propagates then assume we'll capture its records
+            # on its parent
+            if not logger.propagate:
+                self.loggers[logger.name] = logger.level
 
         root = logging.getLogger("torch._inductor")
         if sys.version_info < (3, 12):
@@ -343,7 +352,7 @@ class _LoggerState:
             try:
                 for logger in root.manager.loggerDict.values():
                     if filter(logger):
-                        self.loggers[logger.name] = logger.level
+                        track(logger)
             finally:
                 logging._releaseLock()  # type: ignore[attr-defined]
         else:
@@ -351,7 +360,7 @@ class _LoggerState:
             while q:
                 logger = q.pop()
                 if filter(logger):
-                    self.loggers[logger.name] = logger.level
+                    track(logger)
                 q.extend(logger.getChildren())
 
     def __enter__(self) -> _CapturedLogs:
@@ -381,6 +390,7 @@ class _CapturedLogs:
     state: _LoggerState
     queue: queue.Queue[logging.LogRecord]
     handlers: dict[str, logging.Handler] | None
+    saved_config: dict[str, tuple[int, bool]]
 
     def __init__(self, state: _LoggerState) -> None:
         self.state = state
@@ -389,6 +399,10 @@ class _CapturedLogs:
         self.queue = queue.Queue(-1)
         # Mapping from name to handler (only valid when applied)
         self.handlers = None
+        # Mapping from name to the (level, propagate) the logger had before
+        # apply() changed it (the child process is reused across compiles so we
+        # put it back in remove()).
+        self.saved_config = {}
 
     def finish(self) -> list[logging.LogRecord]:
         if self.handlers is not None:
@@ -408,20 +422,38 @@ class _CapturedLogs:
         for name, handler in handlers.items():
             logger = logging.getLogger(name)
             logger.removeHandler(handler)
+        saved_config, self.saved_config = self.saved_config, {}
+        for name, (level, propagate) in saved_config.items():
+            logger = logging.getLogger(name)
+            logger.setLevel(level)
+            logger.propagate = propagate
 
+    # NOTE: apply() and remove() mutate process-wide logger state. This is safe
+    # because the subprocess pool has a single worker which runs one compile at
+    # a time (see _SubprocessFxCompile.process_pool()).
     def apply(self) -> None:
         from logging.handlers import QueueHandler
 
         if self.handlers is not None:
             raise AssertionError("expected handlers to be None in apply")
         self.handlers = {}
-        for name, level in self.state.loggers.items():
+        for name in self.state.loggers:
             logger = logging.getLogger(name)
             handler = QueueHandler(self.queue)
             self.handlers[name] = handler
             logger.addHandler(handler)
-            if level != logging.NOTSET:
+        # Mirror the parent's logger levels and propagation. The child may have
+        # been started before the parent changed its logging config (for
+        # example enabling a torch._logging artifact via set_logs()) so we
+        # can't rely on the environment the child was spawned with. Matching
+        # propagate means each record reaches exactly one of the handlers
+        # above, the same as it would in the parent.
+        for name, (level, propagate) in self.state.config.items():
+            logger = logging.getLogger(name)
+            if (logger.level, logger.propagate) != (level, propagate):
+                self.saved_config[name] = (logger.level, logger.propagate)
                 logger.setLevel(level)
+                logger.propagate = propagate
 
 
 class _SerializedFxCompile(FxCompile):
