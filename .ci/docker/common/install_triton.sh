@@ -105,5 +105,9 @@ fi
 # It depends on torch and triton. We don't want to install
 # triton and torch from production on Docker CI images
 if [[ "$ANACONDA_PYTHON_VERSION" != 3.9* ]]; then
-  pip_install helion --no-deps
+  # helion 1.6.0 fails at import on Python < 3.12 (frozen dataclass _Facts in
+  # helion/_compiler/cute/smem_footprint.py uses MappingProxyType({}) as a field
+  # default -> ValueError, not caught by torch/utils/_helion.py).
+  # Drop this pin once a helion release with the fix is available.
+  pip_install "helion<1.6.0" --no-deps
 fi
