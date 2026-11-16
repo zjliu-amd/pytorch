@@ -665,6 +665,17 @@ def _resolve_load_device(device: int | None, device_type: str) -> int | None:
     return get_interface_for_device(device_type.replace("hip", "cuda")).current_device()
 
 
+def _triton_cache_dir_for_device(device: int | None, device_type: str) -> str:
+    """
+    triton_cache_dir() for a kernel's recorded device. A device-less kernel's index
+    is resolved only when TRITON_CACHE_DIR does not already decide the directory, so
+    a forked compile worker, which cannot query the device, never has to.
+    """
+    if (directory := os.getenv("TRITON_CACHE_DIR")) is not None:
+        return directory
+    return triton_cache_dir(_resolve_load_device(device, device_type))
+
+
 class CachingAutotuner(KernelInterface):
     """
     Simplified version of Triton autotuner that has no invalidation
@@ -3359,11 +3370,9 @@ class StaticTritonCompileResult(CompileResult[_T]):
                 cubin_location = binary_paths[0]
             else:
                 cubin_location = os.path.join(
-                    triton_cache_dir(
-                        _resolve_load_device(
-                            triton_meta.get("device"),
-                            triton_meta.get("device_type", "cuda"),
-                        )
+                    _triton_cache_dir_for_device(
+                        triton_meta.get("device"),
+                        triton_meta.get("device_type", "cuda"),
                     ),
                     triton_hash_to_path_key(kernel.hash),
                     f"{kernel.src.fn.__name__}{binary_ext}",

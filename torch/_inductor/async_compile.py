@@ -96,6 +96,37 @@ def _pycodecache_kernel_compile_env() -> dict[str, str | None]:
     return {v: os.environ.get(v) for v in env_vars}
 
 
+def _triton_cache_dir_for_workers() -> str | None:
+    """
+    The TRITON_CACHE_DIR to send to compile workers with a Triton kernel.
+
+    Under compile-on-one-rank a GPU kernel records no device index, and
+    CachingAutotuner falls back to the current device's directory when
+    TRITON_CACHE_DIR is unset (see ``_resolve_load_device``). A forked compile
+    worker cannot query the device ("Cannot re-initialize CUDA in forked
+    subprocess"), so resolve the directory here, in the parent: it is the one the
+    parent itself would use for the kernel.
+    """
+    directory = os.environ.get("TRITON_CACHE_DIR")
+    if directory is not None:
+        return directory
+
+    from torch.fx.experimental.proxy_tensor import _coor_enabled
+
+    if not _coor_enabled():
+        return None
+
+    from torch._dynamo.device_interface import get_interface_for_device
+    from torch._inductor.runtime.cache_dir_utils import triton_cache_dir
+    from torch._inductor.runtime.triton_heuristics import _resolve_load_device
+    from torch._inductor.utils import get_gpu_type
+
+    gpu_type = get_gpu_type()
+    if not get_interface_for_device(gpu_type).is_available():
+        return None
+    return triton_cache_dir(_resolve_load_device(None, gpu_type))
+
+
 def pre_fork_setup():
     """
     Setup that must be done prior to forking with a process pool.
@@ -605,6 +636,7 @@ class AsyncCompile:
                 "TRITON_LIBDEVICE_PATH",
             ]
             extra_env = {v: os.environ.get(v) for v in env_vars}
+            extra_env["TRITON_CACHE_DIR"] = _triton_cache_dir_for_workers()
             extra_config = {
                 "use_static_triton_launcher": torch._inductor.config.use_static_triton_launcher,
                 "static_launch_user_defined_triton_kernels": (

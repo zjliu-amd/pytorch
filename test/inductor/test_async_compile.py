@@ -426,6 +426,35 @@ def test_flydsl_loader_main(value, stream):
 
     @requires_gpu()
     @requires_triton()
+    @parametrize("method", ("subprocess", "fork"))
+    def test_compile_on_one_rank_forked_pool_without_triton_cache_dir(self, method):
+        # A compile-on-one-rank kernel records no device index. With
+        # TRITON_CACHE_DIR unset, a forked compile worker must not have to query
+        # the current device ("Cannot re-initialize CUDA in forked subprocess").
+        def fn(x, y):
+            return (x.sin() * y).sum(-1) + x.cos().amax(-1)
+
+        x = torch.randn(64, 128, device=GPU_TYPE)
+        y = torch.randn(64, 128, device=GPU_TYPE)
+
+        with config.patch(worker_start_method=method, compile_threads=2):
+            shutdown_compile_workers()
+            try:
+                AsyncCompile.wait_pool_ready()
+                self.assertTrue(AsyncCompile.use_process_pool())
+                with (
+                    fresh_cache(),
+                    patch.dict(os.environ),
+                    torch.compiler.config.patch(compile_on_one_rank=True),
+                ):
+                    os.environ.pop("TRITON_CACHE_DIR", None)
+                    compiled_fn = torch.compile(fn)
+                    self.assertEqual(fn(x, y), compiled_fn(x, y))
+            finally:
+                shutdown_compile_workers()
+
+    @requires_gpu()
+    @requires_triton()
     @patch("torch._inductor.runtime.coordinate_descent_tuner.CoordescTuner.autotune")
     @parametrize("method", ("subprocess", "fork", "spawn"))
     def test_autotune_lookup_table(self, mock_autotune, method):
