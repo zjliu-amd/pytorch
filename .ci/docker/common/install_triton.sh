@@ -104,6 +104,10 @@ fi
 # IMPORTANT: helion needs to be installed without dependencies.
 # It depends on torch and triton. We don't want to install
 # triton and torch from production on Docker CI images
+# Pin helion so that image rebuilds are reproducible and a new helion release
+# does not silently land in CI. helion 1.6.0 cannot be imported on Python 3.11
+# (mutable MappingProxyType dataclass default in
+# helion/_compiler/cute/smem_footprint.py); bump deliberately.
 if [[ "$ANACONDA_PYTHON_VERSION" != 3.9* ]]; then
-  pip_install helion --no-deps
+  pip_install helion==1.5.2 --no-deps
 fi
