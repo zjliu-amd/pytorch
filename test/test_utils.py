@@ -928,6 +928,40 @@ class TestAssert(TestCase):
             torch._assert(torch.tensor([False], dtype=torch.bool), "bar")
 
 
+class TestHelionUtils(TestCase):
+    def test_broken_helion_install_is_unavailable(self):
+        # A helion that raises a non-ImportError at import time (e.g. helion
+        # 1.6.0 on Python 3.11 raises ValueError) must be reported as
+        # unavailable with a warning, not propagate the exception.
+        import torch.utils._helion as helion_utils
+
+        class _BrokenHelionFinder:
+            def find_spec(self, name, path=None, target=None):
+                if name == "helion" or name.startswith("helion."):
+                    raise ValueError("simulated broken helion import")
+                return None
+
+        def clear_caches():
+            helion_utils.has_helion_package.cache_clear()
+            helion_utils.has_helion.cache_clear()
+
+        saved_modules = {
+            k: sys.modules.pop(k)
+            for k in list(sys.modules)
+            if k == "helion" or k.startswith("helion.")
+        }
+        finder = _BrokenHelionFinder()
+        sys.meta_path.insert(0, finder)
+        self.addCleanup(clear_caches)
+        self.addCleanup(sys.modules.update, saved_modules)
+        self.addCleanup(sys.meta_path.remove, finder)
+        clear_caches()
+
+        with self.assertWarnsRegex(UserWarning, "ValueError"):
+            self.assertFalse(helion_utils.has_helion_package())
+        self.assertFalse(helion_utils.has_helion())
+
+
 @unittest.skipIf(IS_SANDCASTLE, "cpp_extension is OSS only")
 class TestStandaloneCPPJIT(TestCase):
     def test_load_standalone(self):
