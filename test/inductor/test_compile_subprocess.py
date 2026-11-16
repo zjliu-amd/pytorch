@@ -6,6 +6,8 @@
 
 import contextlib
 import importlib
+import io
+import logging
 import os
 import sys
 import time
@@ -16,6 +18,7 @@ from unittest.mock import patch
 import torch
 import torch.library
 from torch._inductor.compile_fx import _InProcessFxCompile, FxCompile, FxCompileMode
+from torch._inductor.compile_fx_subproc import _SubprocessFxCompile
 from torch._inductor.graph import GraphLowering
 from torch._inductor.test_case import TestCase
 from torch.testing._internal.common_utils import (
@@ -34,6 +37,7 @@ from torch.testing._internal.inductor_utils import (
     RUN_CPU,
     RUN_GPU,
 )
+from torch.testing._internal.logging_utils import logs_to_string
 
 
 if IS_WINDOWS and IS_CI:
@@ -270,6 +274,78 @@ class TestSubprocess(TestCase):
             self.assertGreater(_AsyncFxCompile._stat_eager_runs, 0)
             self.assertEqual(_AsyncFxCompile._stat_bg_started, 2)
             self.assertEqual(_AsyncFxCompile._stat_bg_finished, 2)
+
+
+# Kept separate from TestSubprocess (the base of CpuTests/GPUTests) since these
+# tests don't depend on the device so there's no point in running them for each.
+@patch("torch._inductor.compile_fx.fx_compile_mode", FxCompileMode.SUBPROCESS)
+class TestSubprocessLogging(TestCase):
+    def setUp(self):
+        super().setUp()
+        torch._dynamo.reset()
+        FxCompile._reset_stats()
+
+    def tearDown(self):
+        super().tearDown()
+        torch._dynamo.reset()
+
+    @staticmethod
+    def _restart_subprocess_pool():
+        if _SubprocessFxCompile.process_pool.cache_info().currsize:
+            _SubprocessFxCompile.process_pool().shutdown()
+            _SubprocessFxCompile.process_pool.cache_clear()
+
+    def _check_post_grad_graph_logs(self, start_worker_with_logs):
+        # The child's logging config is fixed when the compile subprocess
+        # starts. Changes to the logging config in the parent after that must
+        # still be honored by the child: post_grad_graphs is logged exactly
+        # once while it's enabled and not at all once it's disabled again.
+        def fn(x, y):
+            return (x + y).sin()
+
+        def compile_and_run():
+            torch._dynamo.reset()
+            torch.compile(fn, backend="inductor")(torch.randn(8), torch.randn(8))
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(torch._inductor.config.patch(fx_graph_cache=False))
+            stack.enter_context(
+                torch._functorch.config.patch(enable_autograd_cache=False)
+            )
+
+            # Make sure the compile subprocess is started at a known point.
+            self._restart_subprocess_pool()
+            stack.callback(self._restart_subprocess_pool)
+            if not start_worker_with_logs:
+                compile_and_run()
+
+            log_stream, ctx = logs_to_string(
+                "torch._inductor.compile_fx", "post_grad_graphs"
+            )
+            with ctx():
+                compile_and_run()
+            self.assertEqual(log_stream.getvalue().count("AFTER POST GRAD"), 1)
+
+            artifact_logger = torch._logging.getArtifactLogger(
+                "torch._inductor.compile_fx", "post_grad_graphs"
+            )
+            log_stream = io.StringIO()
+            handler = logging.StreamHandler(log_stream)
+            artifact_logger.addHandler(handler)
+            stack.callback(artifact_logger.removeHandler, handler)
+            compile_and_run()
+            self.assertNotIn("AFTER POST GRAD", log_stream.getvalue())
+
+        self.assertEqual(
+            FxCompile._compile_stats[_SubprocessFxCompile].codegen_and_compile,
+            2 if start_worker_with_logs else 3,
+        )
+
+    def test_artifact_logs_enabled_after_worker_start(self):
+        self._check_post_grad_graph_logs(start_worker_with_logs=False)
+
+    def test_artifact_logs_disabled_after_worker_start(self):
+        self._check_post_grad_graph_logs(start_worker_with_logs=True)
 
 
 if RUN_CPU:

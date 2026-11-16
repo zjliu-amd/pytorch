@@ -7,12 +7,11 @@ import importlib
 import logging
 import os
 import queue
-import sys
 import tempfile
 import warnings
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import final, Self, TYPE_CHECKING, TypeGuard
+from typing import final, Self, TYPE_CHECKING
 from typing_extensions import override
 
 import torch._inductor.async_compile
@@ -313,46 +312,33 @@ class _LoggerState:
     a context manager which returns the captured logs (object).
     """
 
-    loggers: dict[str, int]
+    loggers: dict[str, tuple[int, bool]]
     # The actual log capturing mechanism - this should be None when we're not
     # actively capturing logs.
     captured_logs: _CapturedLogs | None = None
 
     def __init__(self) -> None:
-        # Mapping from logger name to level.
+        # Mapping from logger name to (level, propagate). We record every
+        # torch._inductor logger - including propagating loggers with no level
+        # of their own - because the child's logging config is fixed when the
+        # subprocess pool starts and must be made to match the parent's
+        # current config for each compile (for example an artifact logger
+        # enabled or disabled via TORCH_LOGS or torch._logging.set_logs()
+        # since then).
         self.loggers = {}
 
-        def filter(
-            logger: logging.Logger | logging.PlaceHolder,
-        ) -> TypeGuard[logging.Logger]:
+        # Walk loggerDict rather than Logger.getChildren(): getChildren() only
+        # returns direct children so it misses loggers whose intermediate
+        # package logger was never created (they're only PlaceHolders).
+        with logging._lock:  # type: ignore[attr-defined]
+            all_loggers = list(logging.Logger.manager.loggerDict.values())
+        for logger in all_loggers:
+            # PlaceHolders aren't loggers and have no config of their own.
             if not isinstance(logger, logging.Logger):
-                # Assume that Placeholders propagate
-                return False
+                continue
             # We only want to track torch._inductor logging
-            if not logger.name.startswith("torch._inductor"):
-                return False
-            # If this logger propagates then assume we'll track its parent
-            if logger.propagate:
-                return False
-            return True
-
-        root = logging.getLogger("torch._inductor")
-        if sys.version_info < (3, 12):
-            # logging.getChildren() doesn't exist until 3.12
-            logging._acquireLock()  # type: ignore[attr-defined]
-            try:
-                for logger in root.manager.loggerDict.values():
-                    if filter(logger):
-                        self.loggers[logger.name] = logger.level
-            finally:
-                logging._releaseLock()  # type: ignore[attr-defined]
-        else:
-            q = [root]
-            while q:
-                logger = q.pop()
-                if filter(logger):
-                    self.loggers[logger.name] = logger.level
-                q.extend(logger.getChildren())
+            if logger.name.startswith("torch._inductor"):
+                self.loggers[logger.name] = (logger.level, logger.propagate)
 
     def __enter__(self) -> _CapturedLogs:
         if self.captured_logs is not None:
@@ -381,6 +367,7 @@ class _CapturedLogs:
     state: _LoggerState
     queue: queue.Queue[logging.LogRecord]
     handlers: dict[str, logging.Handler] | None
+    saved_config: dict[str, tuple[int, bool]]
 
     def __init__(self, state: _LoggerState) -> None:
         self.state = state
@@ -389,6 +376,9 @@ class _CapturedLogs:
         self.queue = queue.Queue(-1)
         # Mapping from name to handler (only valid when applied)
         self.handlers = None
+        # Mapping from name to the original (level, propagate) to restore on
+        # remove() (only valid when applied)
+        self.saved_config = {}
 
     def finish(self) -> list[logging.LogRecord]:
         if self.handlers is not None:
@@ -408,6 +398,13 @@ class _CapturedLogs:
         for name, handler in handlers.items():
             logger = logging.getLogger(name)
             logger.removeHandler(handler)
+        # The child process is reused across compiles so put the loggers back
+        # the way we found them.
+        saved_config, self.saved_config = self.saved_config, {}
+        for name, (level, propagate) in saved_config.items():
+            logger = logging.getLogger(name)
+            logger.setLevel(level)
+            logger.propagate = propagate
 
     def apply(self) -> None:
         from logging.handlers import QueueHandler
@@ -415,13 +412,19 @@ class _CapturedLogs:
         if self.handlers is not None:
             raise AssertionError("expected handlers to be None in apply")
         self.handlers = {}
-        for name, level in self.state.loggers.items():
+        self.saved_config = {}
+        for name, (level, propagate) in self.state.loggers.items():
             logger = logging.getLogger(name)
-            handler = QueueHandler(self.queue)
-            self.handlers[name] = handler
-            logger.addHandler(handler)
-            if level != logging.NOTSET:
-                logger.setLevel(level)
+            self.saved_config[name] = (logger.level, logger.propagate)
+            logger.setLevel(level)
+            logger.propagate = propagate
+            # Only capture at the loggers which stop propagation - a record
+            # from a propagating logger will reach (and be captured by) its
+            # nearest non-propagating ancestor, so it's only captured once.
+            if not propagate:
+                handler = QueueHandler(self.queue)
+                self.handlers[name] = handler
+                logger.addHandler(handler)
 
 
 class _SerializedFxCompile(FxCompile):
