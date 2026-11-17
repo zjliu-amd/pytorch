@@ -2075,6 +2075,35 @@ if(USE_ROCM)
   target_include_directories(torch_hip INTERFACE $<INSTALL_INTERFACE:include>)
 endif()
 
+# On Windows the loader resolves the HIP runtime import of torch_hip.dll
+# (amdhip64_<N>.dll) with the standard DLL search order, which looks in
+# System32 before PATH. The display driver installs its own amdhip64_<N>.dll
+# there, and it can be older than the runtime PyTorch was built against
+# (rocBLAS then fails with hipErrorInvalidDeviceFunction). Python preloads
+# the SDK runtime by full path (torch/_rocm_init.py), but a test executable
+# cannot: load-time imports are resolved before main() runs. The directory
+# of the executable is searched first, so copy the HIP runtime there. This
+# covers binaries run from build/bin (CPP_TESTS_DIR); copies installed with
+# INSTALL_TEST into torch/test and torch/bin are not covered.
+if(WIN32 AND USE_ROCM AND (BUILD_TEST OR BUILD_STATIC_RUNTIME_BENCHMARK))
+  file(GLOB _hip_runtime_dlls
+    "${ROCM_PATH}/bin/amdhip64_*.dll"
+    "${ROCM_PATH}/bin/amd_comgr*.dll"
+    "${ROCM_PATH}/bin/hiprtc*.dll"
+    "${ROCM_PATH}/bin/rocm_kpack.dll")
+  if(_hip_runtime_dlls)
+    add_custom_target(copy_hip_runtime_for_tests ALL
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${PROJECT_BINARY_DIR}/bin"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_hip_runtime_dlls}
+              "${PROJECT_BINARY_DIR}/bin"
+      COMMENT "Copying the HIP runtime next to the C++ test binaries"
+      VERBATIM)
+  else()
+    message(WARNING "No HIP runtime DLLs found in ${ROCM_PATH}/bin; C++ "
+                    "tests may load the display driver's HIP runtime.")
+  endif()
+endif()
+
 if(BUILD_STATIC_RUNTIME_BENCHMARK)
   add_subdirectory(${TORCH_ROOT}/benchmarks/static_runtime ${PROJECT_BINARY_DIR}/bin)
   add_executable(static_runtime_bench "${STATIC_RUNTIME_BENCHMARK_SRCS}")

@@ -1637,6 +1637,11 @@ def get_pytest_args(options, test_file, is_cpp_test=False, is_distributed_test=F
             # run_test_retries does for non-xdist runs. XDIST_SERIAL_FILES
             # always run every test so run_test reruns all of their failures.
             rerun_options.remove("-x")
+        elif is_cpp_test and options.continue_through_error:
+            # C++ tests do not go through run_test_retries, which is what
+            # continues past a failure for Python tests, so with -x the first
+            # failing (or crashing) gtest case would end the whole binary.
+            rerun_options.remove("-x")
 
     pytest_args = [
         "-vv",
