@@ -77,6 +77,9 @@ class TorchSaveJitStream_CUDA(FileSetup):
                 a = torch.rand(3, 4, device="cuda")
                 b = torch.rand(3, 4, device="cuda")
 
+                # a and b are produced on the current stream; order s after
+                # them before s reads them.
+                s.wait_stream(torch.cuda.current_stream(s.device_index()))
                 with torch.cuda.stream(s):
                     is_stream_s = (
                         torch.cuda.current_stream(s.device_index()).id() == s.id()
