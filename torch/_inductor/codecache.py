@@ -3637,13 +3637,11 @@ end
                         asm_files.append(asm_file)
 
                     cubin_file = value[get_cpp_wrapper_cubin_path_name()]
-                    # rocm_multiarch_utils does not support Windows yet (no
-                    # /dev/null, Linux tool paths), so on Windows the option
-                    # stays ignored, as before.
+                    # On Windows only ROCm reaches this point (see above);
+                    # rocm_multiarch_utils finds the Windows SDK tools.
                     if (
                         config.aot_inductor.emit_multi_arch_kernel
                         and device_type == "cuda"
-                        and not _IS_WINDOWS
                     ):
                         if torch.version.hip is None:
                             fatbin_cmds.append(

@@ -7,12 +7,28 @@ import logging
 import os
 import re
 import subprocess
+import sys
 
 import torch
 from torch.utils.cpp_extension import _join_rocm_home, ROCM_HOME
 
 
 log = logging.getLogger(__name__)
+
+
+def _rocm_llvm_tool(name: str) -> str:
+    """Path to an LLVM tool in ROCM_HOME.
+
+    Linux ROCm keeps LLVM in <ROCM_HOME>/llvm/bin; the Windows ROCm SDK keeps
+    it in <ROCM_HOME>/lib/llvm/bin and the executables end in .exe.
+    """
+    if sys.platform != "win32":
+        return _join_rocm_home("llvm", "bin", name)
+    for parts in (("llvm", "bin"), ("lib", "llvm", "bin")):
+        candidate = _join_rocm_home(*parts, name + ".exe")
+        if os.path.exists(candidate):
+            return candidate
+    return _join_rocm_home("lib", "llvm", "bin", name + ".exe")
 
 
 def get_rocm_compiler() -> str:
@@ -33,7 +49,7 @@ def get_rocm_compiler() -> str:
         )
 
     # ROCm's clang is at <ROCM_HOME>/llvm/bin/clang
-    clang_path = _join_rocm_home("llvm", "bin", "clang")
+    clang_path = _rocm_llvm_tool("clang")
 
     if not os.path.exists(clang_path):
         raise RuntimeError(
@@ -61,7 +77,7 @@ def get_rocm_bundler() -> str:
         )
 
     # Bundler is at <ROCM_HOME>/llvm/bin/clang-offload-bundler
-    bundler_path = _join_rocm_home("llvm", "bin", "clang-offload-bundler")
+    bundler_path = _rocm_llvm_tool("clang-offload-bundler")
 
     if not os.path.exists(bundler_path):
         raise RuntimeError(
@@ -215,10 +231,18 @@ def create_multiarch_bundle(code_objects: dict, output_bundle_path: str) -> bool
         return False
 
     # Build targets and inputs lists for clang-offload-bundler
-    targets = ["host-x86_64-unknown-linux-gnu"]
+    if sys.platform == "win32":
+        targets = ["host-x86_64-pc-windows-msvc"]
+        # There is no /dev/null file on Windows; use an empty file instead.
+        empty_host = output_bundle_path + ".host"
+        with open(empty_host, "wb"):
+            pass
+    else:
+        targets = ["host-x86_64-unknown-linux-gnu"]
+        empty_host = "/dev/null"
 
     # We include a dummy host entry to satisfy the bundler format
-    inputs = ["/dev/null"]
+    inputs = [empty_host]
 
     for arch, path in sorted(code_objects.items()):
         if not os.path.exists(path):
@@ -230,6 +254,8 @@ def create_multiarch_bundle(code_objects: dict, output_bundle_path: str) -> bool
         inputs.append(path)
 
     if len(inputs) == 1:  # Only host, no device code
+        if sys.platform == "win32":
+            os.remove(empty_host)
         return False
 
     cmd = [
@@ -256,6 +282,12 @@ def create_multiarch_bundle(code_objects: dict, output_bundle_path: str) -> bool
 
     except subprocess.CalledProcessError:
         return False
+    finally:
+        if sys.platform == "win32":
+            try:
+                os.remove(empty_host)
+            except OSError:
+                pass
 
 
 def compile_multiarch_bundle_from_llvm_ir(
