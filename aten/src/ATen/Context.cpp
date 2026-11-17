@@ -709,7 +709,8 @@ bool Context::ckGemmSupported() {
 }
 
 void Context::setBlasPreferredBackend(at::BlasBackend b) {
-#ifdef _MSC_VER
+// Windows ROCm ships hipBLAS and hipBLASLt, so the backend can be chosen there.
+#if defined(_MSC_VER) && !defined(USE_ROCM)
   TORCH_WARN_ONCE(
     "torch.backends.cuda.preferred_blas_library is an experimental feature. "
     "It is not supported on Windows."
