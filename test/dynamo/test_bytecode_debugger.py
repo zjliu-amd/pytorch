@@ -200,7 +200,7 @@ class TestBytecodeDebugger(TestCase):
             stack_at_call = "\n".join(lines)
 
             # Normalize addresses and tensor values
-            stack_at_call = re.sub(r"0x[0-9a-f]+(?! <NULL>)", "0xADDR", stack_at_call)
+            stack_at_call = re.sub(r"0x[0-9a-fA-F]+(?! <NULL>)", "0xADDR", stack_at_call)
             stack_at_call = re.sub(r"tensor\([^)]+\)", "tensor(...)", stack_at_call)
 
             if sys.version_info >= (3, 13):
@@ -441,7 +441,8 @@ Stack (TOS at end):
                 output = yield "s"
 
             # Normalize addresses and tensor values
-            normalized = re.sub(r"0x[0-9a-f]+", "0xADDR", stack_output)
+            # %p prints uppercase hex digits on Windows.
+            normalized = re.sub(r"0x[0-9a-fA-F]+", "0xADDR", stack_output)
             normalized = re.sub(r"tensor\([^)]+\)", "tensor(...)", normalized)
             # Extract just the list part
             match = re.search(r"\[.*\]", normalized, re.DOTALL)

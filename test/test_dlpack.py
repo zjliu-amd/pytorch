@@ -1,5 +1,7 @@
 # Owner(s): ["module: tests"]
 
+import functools
+
 import torch
 from torch.testing import make_tensor
 from torch.testing._internal.common_cuda import (
@@ -28,6 +30,7 @@ from torch.testing._internal.common_utils import (
     HardwareClassification,
     instantiate_parametrized_tests,
     IS_JETSON,
+    IS_WINDOWS,
     parametrize,
     run_tests,
     skipIfTorchDynamo,
@@ -49,6 +52,25 @@ from torch.utils.dlpack import (
 #
 # This is used for guaranteeing we are going through the DLPack method, and not
 # something else, e.g.: CUDA array interface, buffer protocol, etc.
+
+def _xfail_null_stream_on_windows_rocm(test_fn):
+    """The current stream's native handle is NULL on Windows ROCm, as on the
+    Windows CUDA builds upstream xfails; expect exactly that failure."""
+    if not (IS_WINDOWS and TEST_WITH_ROCM):
+        return test_fn
+
+    @functools.wraps(test_fn)
+    def wrapper(self, *args, **kwargs):
+        if getattr(self, "device_type", None) != "cuda":
+            return test_fn(self, *args, **kwargs)
+        import pytest
+
+        with self.assertRaisesRegex(RuntimeError, "Expected stream to be non-NULL"):
+            test_fn(self, *args, **kwargs)
+        pytest.xfail("current stream handle is NULL on Windows ROCm")
+
+    return wrapper
+
 class TensorDLPackWrapper:
     def __init__(self, tensor):
         self.tensor = tensor
@@ -608,6 +630,7 @@ class TestTorchDlPackDevice(TestCase):
             inp.__dlpack__(max_version=(1, 0), dl_device=(dl_device_type, 0))
 
     @xfailCUDAIfSM89OrLaterOnWindows
+    @_xfail_null_stream_on_windows_rocm
     @skipMeta
     @onlyNativeDeviceTypes
     def test_dlpack_exchange_api(self, device):

@@ -8071,6 +8071,10 @@ def forward(self, L_x_ : torch.Tensor, s77 : torch.SymInt, s27 : torch.SymInt):
         sys.version_info < (3, 12) or sys.version_info >= (3, 14),
         "only 3.12, 3.13 affected by c recursion limit",
     )
+    @skipIfWindows(
+        msg="python.exe's main-thread stack on Windows overflows (0xC0000005) "
+        "before the raised recursion limits are reached"
+    )
     def test_dynamo_set_recursion_limit(self):
         old_recursion_limit = sys.getrecursionlimit()
         old_dynamo_recursion_limit = torch._dynamo.get_recursion_limit()

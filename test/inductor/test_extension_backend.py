@@ -121,7 +121,10 @@ class BaseExtensionBackendTests(TestCase):
     def setUpClass(cls):
         super().setUpClass()
 
-        cls._build_dir = tempfile.TemporaryDirectory()
+        # The loaded extension .pyd cannot be deleted on Windows.
+        cls._build_dir = tempfile.TemporaryDirectory(
+            ignore_cleanup_errors=sys.platform == "win32"
+        )
         source_file_path = os.path.dirname(os.path.abspath(__file__))
         source_file = os.path.join(
             source_file_path, "extension_backends/cpp/extension_device.cpp"

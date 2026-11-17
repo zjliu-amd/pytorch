@@ -623,7 +623,8 @@ class TestModuleLevelKernels(TestCase):
         # precompiled.
         out = run_script(code, "-kc")
         for key in keys:
-            self.assertRegex(out, rf"{key[:10]}\n  .*GB/s")
+            # \r\n line ends on Windows
+            self.assertRegex(out, rf"{key[:10]}\r?\n  .*GB/s")
         # A module missing from the cache dir is skipped and the rest still run.
         missing = "z" * len(keys[0])
         code = code.replace("kernel_modules=[", f"kernel_modules=[{missing!r}, ")

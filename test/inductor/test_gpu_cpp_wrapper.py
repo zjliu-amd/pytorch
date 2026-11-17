@@ -391,7 +391,11 @@ class TestGpuWrapper(InductorTestCase):
             self.assertNotIn("ATen/cuda/tunable/Tunable.h", code)
             self.assertNotIn("at::cuda::tunable", code)
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            # TunableOp keeps results.csv open, which blocks its deletion on
+            # Windows.
+            with tempfile.TemporaryDirectory(
+                ignore_cleanup_errors=sys.platform == "win32"
+            ) as tmpdir:
                 torch.cuda.tunable.set_filename(
                     os.path.join(tmpdir, "results.csv"), False
                 )

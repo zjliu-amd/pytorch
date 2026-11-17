@@ -63,6 +63,7 @@ from torch.testing._internal.common_utils import (
     skipIfSlowGradcheckEnv,
     skipIfTorchDynamo,
     subtest,
+    TEST_WITH_ROCM,
     xfailIfTorchDynamo,
     xfailIfWindows,
 )
@@ -73,6 +74,11 @@ from torch.testing._internal.opinfo.core import (
     SkipRule,
     XFailRule,
 )
+
+
+# These pass on Windows ROCm (triton-windows and AOTriton); the Windows xfails are
+# for CUDA.
+xfailIfWindowsCUDA = xfailIfWindows if not TEST_WITH_ROCM else (lambda fn: fn)
 from torch.testing._internal.opinfo.definitions.nested import _sample_njts, njt_op_db
 from torch.utils._pytree import tree_flatten, tree_map_only
 from torch.utils.checkpoint import checkpoint
@@ -7165,7 +7171,7 @@ torch.cuda.synchronize()
 
     @skipIfTorchDynamo("SDPA test compiles internally")
     @skipCUDAIf(not SM70OrLater, "GPU capability is < SM70")
-    @xfailIfWindows
+    @xfailIfWindowsCUDA
     @onlyCUDA
     @dtypes(
         *(
@@ -7349,7 +7355,7 @@ torch.cuda.synchronize()
                 out, out_component, atol=output_ref_atol, rtol=output_ref_rtol
             )
 
-    @decorateIf(xfailIfWindows, lambda params: params["dtype"] == torch.float32)
+    @decorateIf(xfailIfWindowsCUDA, lambda params: params["dtype"] == torch.float32)
     @skipIfTorchDynamo("SDPA test compiles internally")
     @skipCUDAIf(not SM70OrLater, "GPU capability is < SM70")
     @onlyCUDA

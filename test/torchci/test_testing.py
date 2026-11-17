@@ -638,7 +638,13 @@ class TestSerialFileXdistWorkers(TestCase):
                     torch.cuda, "get_device_properties", lambda _: properties
                 )
             )
-            stack.enter_context(unittest.mock.patch.dict(os.environ, env or {}))
+            # Only env decides the serial mode, not the caller's environment.
+            environ = dict(os.environ)
+            environ.pop("PYTORCH_TEST_RUN_EVERYTHING_IN_SERIAL", None)
+            environ.update(env or {})
+            stack.enter_context(
+                unittest.mock.patch.dict(os.environ, environ, clear=True)
+            )
             return run_test_module.serial_file_xdist_workers(file, options, 3)
 
     def test_listed_file_on_cuda_and_cpu(self) -> None:

@@ -3,6 +3,7 @@
 import builtins
 import cmath
 import collections
+import contextlib
 import copyreg
 import dataclasses
 import enum
@@ -5709,7 +5710,10 @@ class TestGuardSerialization(TestGuardSerializationBase):
             self.skipTest("Torch distributed is not available")
         from torch.nn.parallel import DistributedDataParallel as DDP
 
-        tmpfile = tempfile.NamedTemporaryFile()  # noqa: SIM115
+        # delete=False and closed: Windows cannot open a NamedTemporaryFile
+        # again while it is open.
+        tmpfile = tempfile.NamedTemporaryFile(delete=False)  # noqa: SIM115
+        tmpfile.close()
         dist.init_process_group(
             backend="gloo", rank=0, world_size=1, init_method=f"file://{tmpfile.name}"
         )
@@ -5800,7 +5804,8 @@ class TestGuardSerialization(TestGuardSerializationBase):
                     self.assertTrue(loaded.check({"ddp": ddp_model, "x": x}))
         finally:
             dist.destroy_process_group()
-            tmpfile.close()
+            with contextlib.suppress(OSError):
+                os.unlink(tmpfile.name)
 
     def test_dict_keys_serialization(self):
         d = {1: 2, 3: 4}
@@ -5829,7 +5834,10 @@ class TestGuardSerialization(TestGuardSerializationBase):
         if not dist.is_available():
             self.skipTest("Torch distributed is not available")
 
-        tmpfile = tempfile.NamedTemporaryFile()  # noqa:SIM115
+        # delete=False and closed: Windows cannot open a NamedTemporaryFile
+        # again while it is open.
+        tmpfile = tempfile.NamedTemporaryFile(delete=False)  # noqa:SIM115
+        tmpfile.close()
         dist.init_process_group(
             backend="gloo", rank=0, world_size=1, init_method=f"file://{tmpfile.name}"
         )
@@ -5861,7 +5869,8 @@ class TestGuardSerialization(TestGuardSerializationBase):
             )
         finally:
             dist.destroy_process_group()
-            tmpfile.close()
+            with contextlib.suppress(OSError):
+                os.unlink(tmpfile.name)
 
     def test_function_with_wrong_fqn(self):
         def foo(inputs):
@@ -5940,7 +5949,10 @@ class TestGuardSerialization(TestGuardSerializationBase):
         def foo(inputs):
             return inputs.x + 1
 
-        tmpfile = tempfile.NamedTemporaryFile()  # noqa: SIM115
+        # delete=False and closed: Windows cannot open a NamedTemporaryFile
+        # again while it is open.
+        tmpfile = tempfile.NamedTemporaryFile(delete=False)  # noqa: SIM115
+        tmpfile.close()
         dist.init_process_group(
             backend="gloo",
             init_method=f"file://{tmpfile.name}",
@@ -5955,7 +5967,8 @@ class TestGuardSerialization(TestGuardSerializationBase):
             self._test_check_fn(ref, loaded, {"inputs": Inputs(x, pg)}, True)
         finally:
             dist.destroy_process_group()
-            tmpfile.close()
+            with contextlib.suppress(OSError):
+                os.unlink(tmpfile.name)
 
     def test_unserializable_submodule(self):
         def foo(mod, x):

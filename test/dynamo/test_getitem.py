@@ -1437,7 +1437,9 @@ class SetDelItemTests(torch._dynamo.test_case.TestCase):
         # the sequence; the tensor setitem path rejects it ("can't assign a
         # tuple/list to a torch.LongTensor"). Mirrors scipy _broadcast_shapes.
         def fn(x):
-            a = np.ones((2, 2), dtype=int)
+            # int64, not int: NumPy 1.x on Windows maps int to int32, while
+            # torch._numpy maps it to int64.
+            a = np.ones((2, 2), dtype=np.int64)
             for row in a:
                 row[1:] = (7,)  # STORE_SUBSCR, tuple RHS
             a[0] = [3, 4]  # list RHS

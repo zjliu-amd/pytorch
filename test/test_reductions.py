@@ -821,7 +821,14 @@ class TestReductionsDevice(TestCase):
         if t.dtype == torch.float:
             self.assertEqual(n, t, rtol=1e-03, atol=1e-05, equal_nan=True)
         else:
-            self.assertEqual(n, t, equal_nan=True)
+            # Where NumPy's default integer is 32-bit (NumPy 1.x on Windows),
+            # integer reductions accumulate in int32 there and in int64 here.
+            exact_dtype = not (
+                np.dtype(int).itemsize == 4
+                and t.dtype == torch.int64
+                and n.dtype == np.int32
+            )
+            self.assertEqual(n, t, equal_nan=True, exact_dtype=exact_dtype)
 
     # TODO: update this and tests that use it to use the device argument properly
     def _test_dim_ops(self, pytorch_op, numpy_op, device,

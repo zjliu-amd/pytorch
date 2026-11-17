@@ -3375,8 +3375,11 @@ for t in threads:
 
         script = """\
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-os.environ["HIP_VISIBLE_DEVICES"] = ""
+# An empty value hides every GPU, but CPython on Windows removes a variable
+# set to "" from the process environment, so use an invalid index there.
+_hidden = "-1" if os.name == "nt" else ""
+os.environ["CUDA_VISIBLE_DEVICES"] = _hidden
+os.environ["HIP_VISIBLE_DEVICES"] = _hidden
 
 # Import numpy before torch to avoid an MKL threading-layer conflict in this
 # subprocess environment.

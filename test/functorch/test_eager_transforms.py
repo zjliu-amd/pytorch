@@ -75,6 +75,7 @@ from torch.testing._internal.common_utils import (
     skipIfTorchDynamo,
     subtest,
     TEST_CUDA_MEM_LEAK_CHECK,
+    TEST_WITH_ROCM,
     TEST_WITH_TORCHDYNAMO,
     TestCase,
 )
@@ -5544,7 +5545,11 @@ class TestCompileTransformsDevice(TestCase):
     # Triton only supports GPU with SM70 or later.
     hw_classification = HardwareClassification.ACCELERATOR
 
-    @expectedFailureIf((IS_WINDOWS and TEST_CUDA) or (TEST_CUDA and not SM70OrLater))
+    # torch.compile works on Windows ROCm (triton-windows), not Windows CUDA.
+    @expectedFailureIf(
+        (IS_WINDOWS and TEST_CUDA and not TEST_WITH_ROCM)
+        or (TEST_CUDA and not SM70OrLater)
+    )
     @unittest.skipIf(
         TEST_CUDA_MEM_LEAK_CHECK,
         "Leaking memory, see https://github.com/pytorch/pytorch/pull/150059 for example",

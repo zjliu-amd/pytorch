@@ -293,6 +293,11 @@ class TestAmdSmiImport(TestCase):
                     provide_sdk_library,
                 )
             ):
+                if IS_WINDOWS:
+                    self.skipTest(
+                        "stands in for libamd_smi.so with the libc mapped in "
+                        "/proc/self/maps (Linux only)"
+                    )
                 with open("/proc/self/maps", encoding="utf-8") as maps:
                     mapped_libc = (
                         fields[-1]
@@ -10807,7 +10812,11 @@ for args in ((a, b), (a, b, False)):
 
         from torch.utils.cpp_extension import load_inline
 
-        dummy_allocator_libname = "dummy_allocator"
+        # One library name per source: rebuilding a loaded DLL fails on Windows
+        # (LNK1104).
+        dummy_allocator_libname = (
+            "dummy_allocator_vars" if check_vars else "dummy_allocator"
+        )
         dummy_allocator = load_inline(
             name=dummy_allocator_libname,
             cpp_sources=dummy_allocator_source_vars

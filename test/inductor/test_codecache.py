@@ -100,6 +100,7 @@ from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     IS_FBCODE,
     IS_SANDCASTLE,
+    IS_WINDOWS,
     parametrize,
     skipIfCppFakeTensor,
 )
@@ -3081,7 +3082,10 @@ class TestStandaloneCompile(TestCase):
         eager_out = f(x)
 
         with (
-            tempfile.TemporaryDirectory() as temp_dir,
+            tempfile.TemporaryDirectory(
+                # Windows cannot delete the loaded .pyd
+                ignore_cleanup_errors=IS_WINDOWS
+            ) as temp_dir,
             config.patch(graph_partition=graph_partition),
         ):
             path = (
@@ -3248,7 +3252,7 @@ class TestStandaloneCompile(TestCase):
         x = torch.randn(2, 4)
         eager_out = mod(x).detach()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=IS_WINDOWS) as temp_dir:
             with fresh_cache():
                 gm, args, kwargs = self.capture(mod)(x)
                 if kwargs:
@@ -3289,7 +3293,7 @@ class TestStandaloneCompile(TestCase):
 
         eager_out = f(x)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=IS_WINDOWS) as temp_dir:
             with fresh_cache():
                 gm, args, kwargs = self.capture(f)(x)
                 if kwargs:
@@ -5273,6 +5277,9 @@ class TestCudaCompileCommand(TestCase):
         self.assertIn("-lcudart", flags)
 
     @requires_cuda_and_triton
+    @unittest.skipIf(
+        IS_WINDOWS, "cuda_compile_command finds the CUDA libraries on Linux only"
+    )
     def test_cuda_compile_command(self):
         cmd_no_extra_args: str = cuda_compile_command(
             ["abc.cu", "def.cu"], "output", "so"
@@ -5643,7 +5650,9 @@ class TestAutotuneCache(TestCase):
 
         # Check that the cache entries seem reasonable
         for k in global_stats.autotune_local.cache:
-            self.assertRegex(k, r"tmp[^/]*/([^/]{2})/[^/]{64}\.best_config")
+            self.assertRegex(
+                k, r"tmp[^/\\]*[/\\]([^/\\]{2})[/\\][^/\\]{64}\.best_config"
+            )
         for k in global_stats.bundled_autotune.cache:
             self.assertRegex(k, r"pt2:bundled-autotune-v1::[0-9a-z]{64}:c[0-9]+")
         for k in global_stats.triton.cache:
