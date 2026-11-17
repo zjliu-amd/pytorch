@@ -1114,8 +1114,12 @@ struct IValuePacker {
   // That's what the TypePtr is for: it contains the information to do the
   // parsing. See torch::jit::toIValue for more information.
   static at::TypePtr packed_type() {
-    // On windows CPU is support compiled autograd.
-#if defined(_WIN32) && (defined(USE_CUDA) || defined(USE_ROCM))
+    // On windows CPU is support compiled autograd. The guard below exists for
+    // the MSVC C2872 'std' ambiguity with CUDA thrust headers
+    // (pytorch/audio#3992, #148454, #159185), so it only applies to CUDA.
+    // "!defined(USE_ROCM)" is needed because hipify rewrites USE_CUDA to
+    // USE_ROCM in this file.
+#if defined(_WIN32) && defined(USE_CUDA) && !defined(USE_ROCM)
     // NB: the if-constexpr usage triggers compilation errors on Windows
     // with certain compiler settings
     // (see https://github.com/pytorch/pytorch/pull/144707 for examples).
