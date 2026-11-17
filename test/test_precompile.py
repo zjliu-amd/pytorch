@@ -7238,7 +7238,9 @@ class TestTritonRuntimeCacheTransport(TestCase):
         from torch.compiler._triton_runtime_cache import export_runtime_cache
 
         with (
-            tempfile.TemporaryDirectory() as tmp,
+            # Triton may build and load its driver module (hip_utils.pyd) into
+            # this cache directory; Windows cannot delete a loaded module.
+            tempfile.TemporaryDirectory(ignore_cleanup_errors=IS_WINDOWS) as tmp,
             _triton_cache_namespace(tmp),
             triton.knobs.autotuning.scope(),
         ):
