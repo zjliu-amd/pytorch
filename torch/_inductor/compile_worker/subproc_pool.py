@@ -192,6 +192,10 @@ class SubprocPool:
     ) -> None:
         entry = os.path.join(os.path.dirname(__file__), "__main__.py")
         self.pickler = pickler or SubprocPickler()
+        if sys.platform == "win32" and kind == SubprocKind.FORK:
+            # Windows has no fork start method: the sidecar would fail in
+            # multiprocessing.get_context("fork") and exit, closing the pool.
+            kind = SubprocKind.SPAWN
         self.kind = kind
 
         subproc_read_fd, write_fd = os.pipe()
@@ -359,7 +363,19 @@ class SubprocPool:
             if msg_header not in (MsgHeader.JOB, MsgHeader.JOB_ERROR):
                 # read_pipe returned None or got exception
                 if self.running:
-                    log.warning("SubprocPool unclean exit")
+                    try:
+                        rc = self.process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        rc = None
+                    if rc:
+                        log.warning(
+                            "SubprocPool unclean exit: compile worker sidecar exited "
+                            "with code %s (set TORCHINDUCTOR_WORKER_SUPPRESS_LOGGING=0 "
+                            "to see its output)",
+                            rc,
+                        )
+                    else:
+                        log.warning("SubprocPool unclean exit")
                     self.running = False
                     self.running_waitcounter.__exit__()
                 self.read_pipe.close()

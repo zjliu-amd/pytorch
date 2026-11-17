@@ -79,6 +79,8 @@ def main():
         SubprocMain(args.pickler, args.kind, args.workers, read_fd, write_fd).main()
     except Exception:
         log.exception("Uncaught exception in compile_worker subprocess")
+        # Exit nonzero so the parent can tell a crashed sidecar from a clean shutdown.
+        sys.exit(1)
 
 
 if __name__ == "__main__":

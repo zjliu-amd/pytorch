@@ -58,6 +58,9 @@ _slot: int | None = None
 def create(nprocs: int) -> None:
     """Sidecar: allocate the shared buffer before forking the worker pool."""
     global _heartbeat, _counter, _nprocs
+    if "fork" not in multiprocessing.get_all_start_methods():
+        # No fork (e.g. Windows): spawn workers cannot inherit the buffer.
+        return
     ctx = multiprocessing.get_context("fork")
     _nprocs = nprocs
     _counter = ctx.Value("i", 0)
