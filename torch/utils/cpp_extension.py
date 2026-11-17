@@ -544,9 +544,25 @@ def _windows_cuda_lib_dir() -> str:
     return os.path.join('lib', 'arm64' if sysconfig.get_platform().lower() == 'win-arm64' else 'x64')
 
 
+def _get_rocm_clang_cl_path() -> str | None:
+    # HIP headers use clang-only syntax that cl.exe rejects, so on Windows the
+    # C++ sources of HIP extensions are compiled with ROCm's clang-cl, the same
+    # compiler that builds PyTorch for ROCm.
+    if ROCM_HOME is None:
+        return None
+    for clang_cl in (os.path.join(ROCM_HOME, 'lib', 'llvm', 'bin', 'clang-cl.exe'),
+                     os.path.join(ROCM_HOME, 'bin', 'clang-cl.exe')):
+        if os.path.exists(clang_cl):
+            return clang_cl
+    return None
+
+
 def get_cxx_compiler():
     if IS_WINDOWS:
-        compiler = os.environ.get('CXX', 'cl')
+        default_compiler = 'cl'
+        if IS_HIP_EXTENSION:
+            default_compiler = _get_rocm_clang_cl_path() or default_compiler
+        compiler = os.environ.get('CXX', default_compiler)
     else:
         compiler = os.environ.get('CXX', 'c++')
     return compiler
@@ -667,6 +683,12 @@ def get_compiler_abi_compatibility_and_version(compiler) -> tuple[bool, TorchVer
         if IS_LINUX:
             minimum_required_version = MINIMUM_GCC_VERSION
             compiler_info = subprocess.check_output([compiler, '-dumpfullversion', '-dumpversion'])
+        elif os.path.basename(compiler).lower().startswith('clang-cl'):
+            # clang-cl (HIP extensions on Windows) fails without input files and
+            # has no MSVC version; report its clang version and accept it.
+            compiler_info = subprocess.check_output([compiler, '--version'], stderr=subprocess.STDOUT)
+            match = re.search(r'(\d+)\.(\d+)\.(\d+)', compiler_info.decode(*SUBPROCESS_DECODE_ARGS))
+            return (True, TorchVersion('.'.join(match.groups()) if match else '0.0.0'))
         else:
             minimum_required_version = MINIMUM_MSVC_VERSION
             compiler_info = subprocess.check_output(compiler, stderr=subprocess.STDOUT)
@@ -1154,6 +1176,9 @@ class BuildExtension(_LazyBuildExt):
 
             self.cflags = copy.deepcopy(extra_postargs)
             extra_postargs = None
+            if IS_HIP_EXTENSION:
+                # Same /MD runtime as the ninja path; hipcc defaults to /MT.
+                _set_hipcc_runtime_lib(False, debug)
 
             def spawn(cmd):
                 # Using regex to match src, obj and include files
@@ -1192,13 +1217,22 @@ class BuildExtension(_LazyBuildExt):
 
                         if IS_HIP_EXTENSION:
                             cflags = win_hip_flags(cflags)
+                            # Same standard as the ninja path's HIP flags.
+                            if not any(f.startswith('-std') for f in cflags):
+                                cflags = cflags + ['-std=c++20']
+                            # hipcc passes include paths to clang without quotes, so a
+                            # space starts a new argument. Same workaround as the
+                            # ninja path (see win_wrap_ninja_compile).
+                            include_list = [s.replace(" ", "\\") for s in include_list]
                         else:
                             cflags = win_cuda_flags(cflags) + ['-std=c++20', '--use-local-env']
                             for ignore_warning in MSVC_IGNORE_CUDAFE_WARNINGS:
                                 cflags = ['-Xcudafe', '--diag_suppress=' + ignore_warning] + cflags
                             cflags = _windows_nvcc_host_preprocessor_flags() + cflags
-                        for flag in COMMON_MSVC_FLAGS:
-                            cflags = ['-Xcompiler', flag] + cflags
+                            # nvcc forwards these to cl.exe. hipcc has no -Xcompiler
+                            # passthrough and clang reads /EHsc etc. as input files.
+                            for flag in COMMON_MSVC_FLAGS:
+                                cflags = ['-Xcompiler', flag] + cflags
                         cmd = _wrap_compiler([nvcc, '-c', src, '-o', obj] + include_list + cflags)
                     else:
                         if isinstance(self.cflags, dict):
@@ -1209,6 +1243,10 @@ class BuildExtension(_LazyBuildExt):
                             cflags = COMMON_MSVC_FLAGS + self.cflags
                             append_std17_if_no_std_present(cflags)
                             cmd += cflags
+                        if IS_HIP_EXTENSION and ('CXX' in os.environ or _get_rocm_clang_cl_path()):
+                            # Match the ninja path: compile C++ sources of HIP
+                            # extensions with clang-cl, not cl.exe.
+                            cmd = [get_cxx_compiler()] + cmd[1:] + COMMON_HIP_FLAGS
                         cmd = _wrap_compiler(cmd)
 
                 return original_spawn(cmd)
