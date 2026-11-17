@@ -75,7 +75,9 @@ uint64_t _get_model_bytecode_version(std::istream& in) {
 }
 
 uint64_t _get_model_bytecode_version(const std::string& filename) {
-  std::ifstream ifile(filename);
+  // Binary mode: in text mode the Windows CRT translates CRLF and stops at
+  // 0x1A, which corrupts the zip archive.
+  std::ifstream ifile(filename, std::ios::binary);
   return _get_model_bytecode_version(ifile);
 }
 

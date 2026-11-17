@@ -6,9 +6,31 @@
 #include <torch/csrc/jit/serialization/import.h>
 #include <torch/torch.h>
 
+#ifdef _WIN32
+#include <ATen/DynamicLibrary.h>
+#endif
+
 // Tests go in torch::jit
 namespace torch {
 namespace jit {
+#ifdef _WIN32
+namespace {
+// On Linux test_jit links jitbackend_test and backend_with_compiler with
+// --no-as-needed so that their static backend registrations run. The Windows
+// linker drops a DLL that test_jit references no symbol from, so load them.
+[[maybe_unused]] const bool kBackendLibsLoaded = [] {
+  for (const char* lib : {"jitbackend_test.dll", "backend_with_compiler.dll"}) {
+    try {
+      static_cast<void>(
+          new at::DynamicLibrary(lib, nullptr, /*leak_handle=*/true));
+    } catch (const c10::DynamicLibraryError& e) {
+      std::cerr << "test_backend: " << e.what() << '\n';
+    }
+  }
+  return true;
+}();
+} // namespace
+#endif
 TEST(BackendTest, ToBackend) {
   Module m("m");
   m.define(R"(

@@ -93,10 +93,16 @@ TEST(ClassTypeTest, IdenticalTypesDifferentCus) {
   } catch (const std::exception& e) {
     // Check that the exception contains the address of the compilation unit
     // in addition to the ClassType's name.
+#ifdef _WIN32
+    // The MSVC STL prints pointers without the 0x prefix.
+    const char* cu_prefix = "foo (of Python compilation unit at: ";
+#else
+    const char* cu_prefix = "foo (of Python compilation unit at: 0x";
+#endif
     testing::FileCheck()
-        .check("foo (of Python compilation unit at: 0x")
+        .check(cu_prefix)
         ->check_same(")")
-        ->check("foo (of Python compilation unit at: 0x")
+        ->check(cu_prefix)
         ->check_same(")")
         ->run(e.what());
 
