@@ -469,10 +469,33 @@ static void apply_svd_cusolver_gesvdjBatched(const Tensor& A, const Tensor& U, c
 
   auto handle = at::cuda::getCurrentCUDASolverDnHandle();
   auto jobz = compute_uv ? CUSOLVER_EIG_MODE_VECTOR : CUSOLVER_EIG_MODE_NOVECTOR;
+#ifdef USE_ROCM
+  // rocSOLVER's batched Jacobi SVD puts the batch on a grid dimension that RDNA
+  // GPUs cap at 65536, so gesvdjBatched fails from 65536 matrices on
+  // (HIPSOLVER_STATUS_INTERNAL_ERROR on gfx1151 with the Windows HIP 7.18
+  // runtime; invalid configuration from 65537 on gfx1201, see
+  // https://github.com/pytorch/pytorch/issues/200879). Like the other batched
+  // solvers, call it on at most 65535 matrices at a time. Each matrix of the
+  // batch occupies lda * n elements of A, min(m, n) of S, ldu * m of U and
+  // ldv * n of V.
+  constexpr int batch_limit = 65535;
+  const int64_t k = std::min(m, n);
+  auto infos_data = infos.data_ptr<int>();
+  for (int mini_idx = 0; mini_idx < batchsize; mini_idx += batch_limit) {
+    int cur_batch_size = std::min<int>(batchsize - mini_idx, batch_limit);
+    const int64_t idx = mini_idx;
+    at::cuda::solver::gesvdjBatched<scalar_t>(
+      handle, jobz, m, n, A_data + idx * lda * n, lda, S_data + idx * k,
+      U_data + idx * ldu * m, ldu, V_data + idx * ldv * n, ldv,
+      infos_data + idx, gesvdj_params, cur_batch_size
+    );
+  }
+#else
   at::cuda::solver::gesvdjBatched<scalar_t>(
     handle, jobz, m, n, A_data, lda, S_data, U_data, ldu, V_data, ldv,
     infos.data_ptr<int>(), gesvdj_params, batchsize
   );
+#endif
 
   TORCH_CUSOLVER_CHECK(cusolverDnDestroyGesvdjInfo(gesvdj_params));
 }
