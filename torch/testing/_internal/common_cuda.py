@@ -185,6 +185,17 @@ DEVICE_ASSERT_MARKERS = (
 def has_device_side_assert(output):
     return any(marker in output for marker in DEVICE_ASSERT_MARKERS)
 
+# On Windows ROCm the kernel-mode driver installs no GPU trap handler, so a
+# device-side assert does not raise: the kernel traps, its queue hangs until
+# the engine is reset, the process sees no error, and later copies can return
+# stale data. Tearing such a context down can also hang the whole machine.
+# Tests that need a device-side assert to fire cannot run there.
+DEVICE_ASSERTS_UNSUPPORTED = IS_WINDOWS and torch.version.hip is not None
+DEVICE_ASSERTS_UNSUPPORTED_REASON = (
+    "device-side asserts do not raise on Windows ROCm: the driver installs no "
+    "GPU trap handler, so the queue hangs instead"
+)
+
 @contextlib.contextmanager
 def blas_library_context(backend):
     prev_backend = torch.backends.cuda.preferred_blas_library()

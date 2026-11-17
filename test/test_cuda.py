@@ -44,6 +44,8 @@ from torch.testing._internal.common_cuda import (
     BF16X9_API_SUPPORTED,
     blas_library_context,
     CUDA_DEVICE_IS_INTEGRATED,
+    DEVICE_ASSERTS_UNSUPPORTED,
+    DEVICE_ASSERTS_UNSUPPORTED_REASON,
     has_device_side_assert,
     PLATFORM_SUPPORTS_GREEN_CONTEXT,
     PLATFORM_SUPPORTS_WORKQUEUE_CONFIG,
@@ -3341,6 +3343,7 @@ raise RuntimeError("device assert did not fire")
             self.assertEqual(stash[0], torch.full_like(a, 6))
             self.assertEqual(stash[1], torch.full_like(a, 6))
 
+    @unittest.skipIf(DEVICE_ASSERTS_UNSUPPORTED, DEVICE_ASSERTS_UNSUPPORTED_REASON)
     def test_fixed_cuda_assert_async(self):
         with self.assertRaisesRegex(
             RuntimeError, "Boolean value of Tensor with no values is ambiguous"

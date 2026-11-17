@@ -36,11 +36,27 @@ class Model2Conv(nn.Module):
 
 @skipIfXpu(msg="ccl doesn't currently work on the XPU stack")
 class TestLayoutOptim(TestCase):
+    # Set when the DDP wrapper cannot be used because the build lacks the
+    # collective backend (e.g. no NCCL/RCCL on Windows ROCm); tests that wrap
+    # the model in DDP skip, the others run without a process group.
+    ddp_unavailable_reason = None
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
 
         import torch.distributed as dist
+
+        if not USE_DDP_WRAPPER:
+            return
+        if GPU_TYPE == "cuda" and not (
+            dist.is_available() and dist.is_nccl_available()
+        ):
+            cls.ddp_unavailable_reason = (
+                "the DDP wrapper needs the NCCL/RCCL backend, which this build "
+                "does not have; set USE_DDP_WRAPPER=0 to use manual graph breaks"
+            )
+            return
 
         # not use a fixed port for stress test
         tot_retry = 5
@@ -90,6 +106,8 @@ class TestLayoutOptim(TestCase):
             else:
                 return m
 
+        if use_ddp_wrapper and self.ddp_unavailable_reason:
+            self.skipTest(self.ddp_unavailable_reason)
         manual_graph_break = not use_ddp_wrapper
         mod = model_class(manual_graph_break=manual_graph_break).to(GPU_TYPE)
         inp = [t.to(GPU_TYPE) for t in mod.get_example_inputs()]

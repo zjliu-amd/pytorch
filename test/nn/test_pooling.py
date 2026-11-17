@@ -17,7 +17,11 @@ import torch.nn.functional as F
 from torch import inf, nan
 from torch.autograd import gradcheck, gradgradcheck
 from torch.testing import make_tensor
-from torch.testing._internal.common_cuda import has_device_side_assert
+from torch.testing._internal.common_cuda import (
+    DEVICE_ASSERTS_UNSUPPORTED,
+    DEVICE_ASSERTS_UNSUPPORTED_REASON,
+    has_device_side_assert,
+)
 from torch.testing._internal.common_device_type import (
     dtypes,
     dtypesIfCUDA,
@@ -1200,6 +1204,8 @@ class TestPoolingNNDevice(NNTestCase):
     ):
         # NOTE: CUDA/XPU tests need to be run in a subprocess because they cause device asserts
         device_type = torch.device(device).type
+        if device_type == "cuda" and should_error and DEVICE_ASSERTS_UNSUPPORTED:
+            self.skipTest(DEVICE_ASSERTS_UNSUPPORTED_REASON)
         if device_type in ("cuda", "xpu"):
             error_msgs = {
                 "MaxUnpool2d": r"Assertion `maxind >= 0 && maxind < outputImageSize` failed",
