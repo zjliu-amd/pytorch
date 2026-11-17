@@ -2262,8 +2262,9 @@ def get_selected_tests(options) -> list[str]:
         from torch.testing._internal.common_cuda import SM120OrLater, SM89OrLater
 
         # Disable tests on Windows for SM89 and later - tests failing in ci
-        # Enable tests after fixing the failures
-        if SM89OrLater:
+        # Enable tests after fixing the failures. These are CUDA compute
+        # capabilities; on ROCm the "capability" is the gfx version, so skip.
+        if SM89OrLater and not TEST_WITH_ROCM:
             WINDOWS_BLOCKLIST.extend(
                 [
                     # Windows fatal exception / access violation
@@ -2294,7 +2295,7 @@ def get_selected_tests(options) -> list[str]:
 
         # Disable tests on Windows for SM120 and later - tests failing in ci
         # Enable tests after fixing the failures
-        if SM120OrLater:
+        if SM120OrLater and not TEST_WITH_ROCM:
             WINDOWS_BLOCKLIST.extend(
                 [
                     # test_api fails on Windows SM120+. Triage pending.
@@ -2311,6 +2312,8 @@ def get_selected_tests(options) -> list[str]:
             WINDOWS_BLOCKLIST.append("jit_fuser")
 
         selected_tests = exclude_tests(WINDOWS_BLOCKLIST, selected_tests, "on Windows")
+        if TEST_WITH_ROCM:
+            selected_tests = exclude_tests(ROCM_BLOCKLIST, selected_tests, "on ROCm")
 
     elif TEST_WITH_ROCM:
         selected_tests = exclude_tests(ROCM_BLOCKLIST, selected_tests, "on ROCm")

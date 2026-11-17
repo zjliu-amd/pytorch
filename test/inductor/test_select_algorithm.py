@@ -41,8 +41,10 @@ from torch.profiler import kineto_available
 from torch.testing import FileCheck
 from torch.testing._internal.common_utils import (
     IS_LINUX,
+    IS_WINDOWS,
     MI300_ARCH,
     skipIfRocmArch,
+    TEST_WITH_ROCM,
     TEST_XPU,
 )
 from torch.testing._internal.inductor_utils import (
@@ -2094,5 +2096,5 @@ class TestTemplateRender(TestCase):
 
 
 if __name__ == "__main__":
-    if IS_LINUX and HAS_GPU and is_big_gpu():
+    if (IS_LINUX or (IS_WINDOWS and TEST_WITH_ROCM)) and HAS_GPU and is_big_gpu():
         run_tests()

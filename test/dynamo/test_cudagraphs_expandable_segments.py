@@ -8,6 +8,7 @@ import sys
 import torch
 from torch._dynamo.test_case import run_tests
 from torch.testing._internal.common_cuda import IS_JETSON, IS_WINDOWS
+from torch.testing._internal.common_utils import TEST_WITH_ROCM
 
 
 pytorch_test_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -26,7 +27,11 @@ from tools.stats.import_test_stats import get_disabled_tests
 sys.path.remove(str(REPO_ROOT))
 
 if __name__ == "__main__":
-    if torch.cuda.is_available() and not IS_JETSON and not IS_WINDOWS:
+    if (
+        torch.cuda.is_available()
+        and not IS_JETSON
+        and (not IS_WINDOWS or TEST_WITH_ROCM)
+    ):
         get_disabled_tests(".")
 
         torch.cuda.memory._set_allocator_settings("expandable_segments:True")

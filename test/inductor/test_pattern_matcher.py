@@ -52,8 +52,10 @@ from torch.testing._internal.common_device_type import skipCUDAIf
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     IS_LINUX,
+    IS_WINDOWS,
     parametrize,
     subtest,
+    TEST_WITH_ROCM,
 )
 from torch.testing._internal.inductor_utils import GPU_TYPE, HAS_GPU, IS_BIG_GPU
 from torch.testing._internal.logging_utils import LoggingTestCase, make_logging_test
@@ -4490,5 +4492,5 @@ class TestPatternMatcherLogging(LoggingTestCase):
 
 
 if __name__ == "__main__":
-    if IS_LINUX and HAS_GPU:
+    if (IS_LINUX or (IS_WINDOWS and TEST_WITH_ROCM)) and HAS_GPU:
         run_tests()
