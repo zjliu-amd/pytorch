@@ -1,12 +1,100 @@
 import os
 import signal
+import subprocess
+import sys
+from collections.abc import Sequence
 from threading import Thread
-from time import sleep
+from time import monotonic, sleep
+from typing import Any, IO
 
 from torch._inductor.compile_worker import watchdog
 
 
 _IN_TOPLEVEL_PROCESS = True
+
+
+def popen_pass_fds(fds: Sequence[int]) -> tuple[list[int], dict[str, Any]]:
+    """
+    Make the pipe fds `fds` available to a subprocess.Popen child.
+
+    Returns the integers to give the child on its command line (to be turned
+    back into fds with fd_from_parent) and the extra Popen kwargs. POSIX uses
+    pass_fds. Windows has no pass_fds, so the child inherits the underlying OS
+    handles instead, and handle_list limits inheritance to just these handles.
+    """
+    if sys.platform != "win32":
+        return list(fds), {"pass_fds": tuple(fds)}
+    import msvcrt
+
+    handles = [msvcrt.get_osfhandle(fd) for fd in fds]
+    for handle in handles:
+        os.set_handle_inheritable(handle, True)
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.lpAttributeList = {"handle_list": handles}
+    return handles, {"startupinfo": startupinfo, "close_fds": True}
+
+
+def fd_from_parent(value: int) -> int:
+    """Inverse of popen_pass_fds, called in the child."""
+    if sys.platform != "win32":
+        return value
+    import msvcrt
+
+    # The handle was made inheritable only to cross into this process; don't
+    # leak it into this process's own children.
+    os.set_handle_inheritable(value, False)
+    return msvcrt.open_osfhandle(value, 0)
+
+
+def wait_readable_win32(pipe: IO[bytes], timeout: float) -> bool:
+    """
+    Windows replacement for selecting a pipe for reading, since select() only
+    supports sockets there. Returns True once data or EOF is available, False
+    on timeout.
+    """
+    assert sys.platform == "win32"
+    import _winapi
+    import msvcrt
+
+    handle = msvcrt.get_osfhandle(pipe.fileno())
+    deadline = monotonic() + timeout
+    delay = 0.001
+    while True:
+        try:
+            available, _ = _winapi.PeekNamedPipe(handle, 0)
+        except OSError:
+            # Broken pipe: the writer is gone, so a read returns EOF.
+            return True
+        if available:
+            return True
+        if monotonic() >= deadline:
+            return False
+        # Back off from 1 ms to 50 ms; a benchmark usually takes far longer.
+        sleep(delay)
+        delay = min(delay * 2, 0.05)
+
+
+def parent_process_gone(orig_ppid: int) -> bool:
+    """
+    True if the process `orig_ppid` that started this one has gone away.
+
+    POSIX reparents orphans, so getppid() changes. Windows never reparents, and
+    a venv's python.exe is a launcher that starts the real interpreter as its
+    child, so getppid() is not the caller's pid there; check that the original
+    process is still running instead.
+    """
+    if sys.platform != "win32":
+        return orig_ppid != os.getppid()
+    import _winapi
+
+    try:
+        handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, orig_ppid)
+    except OSError:
+        return True
+    try:
+        return _winapi.WaitForSingleObject(handle, 0) != _winapi.WAIT_TIMEOUT
+    finally:
+        _winapi.CloseHandle(handle)
 
 
 def in_toplevel_process() -> bool:
@@ -42,8 +130,9 @@ def _async_compile_initializer(orig_ppid: int, close_fds: tuple[int, ...] = ()) 
     def run() -> None:
         while True:
             sleep(60)
-            if orig_ppid != os.getppid():
-                os.kill(os.getpid(), signal.SIGKILL)
+            if parent_process_gone(orig_ppid):
+                # Windows has no SIGKILL; os.kill there calls TerminateProcess.
+                os.kill(os.getpid(), getattr(signal, "SIGKILL", signal.SIGTERM))
 
     global _watchdog_thread, _original_parent
     _original_parent = orig_ppid
@@ -69,4 +158,6 @@ _original_parent: int | None = None
 
 
 def has_parent_changed() -> bool:
-    return _original_parent != os.getppid()
+    if _original_parent is None:
+        return True
+    return parent_process_gone(_original_parent)
