@@ -531,9 +531,9 @@ class TestGpuWrapper(InductorTestCase):
         elif IS_MACOS:
             self.skipTest("non-portable load_library call used in test")
         else:
-            lib_path = find_library_location("libaoti_custom_ops.so")
-            if IS_WINDOWS:
-                lib_path = find_library_location("aoti_custom_ops.dll")
+            lib_path = find_library_location(
+                "aoti_custom_ops.dll" if IS_WINDOWS else "libaoti_custom_ops.so"
+            )
             if not os.path.exists(lib_path):
                 self.skipTest("libaoti_custom_ops not built")
             torch.ops.load_library(str(lib_path))

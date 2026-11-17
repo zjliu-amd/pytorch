@@ -236,8 +236,10 @@ def _enrich_profiler_traces(prof):
     Returns:
         A string representing enriched events
     """
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as f:
-        trace_file = f.name
+    # A directory instead of NamedTemporaryFile: Windows cannot reopen an open
+    # NamedTemporaryFile by name.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        trace_file = os.path.join(tmpdir, 'trace.json')
         prof.export_chrome_trace(trace_file)
 
         with open(trace_file) as f:

@@ -6454,6 +6454,10 @@ def find_library_location(lib_name: str) -> Path:
     path = torch_root.parent / 'build' / 'lib' / lib_name
     if os.path.exists(path):
         return path
+    # Windows builds put DLLs in build/bin (build/lib only has import .lib files)
+    path = torch_root.parent / 'build' / 'bin' / lib_name
+    if IS_WINDOWS and os.path.exists(path):
+        return path
     raise FileNotFoundError(f"Could not find library '{lib_name}' in installed or build paths")
 
 def skip_but_pass_in_sandcastle(reason):

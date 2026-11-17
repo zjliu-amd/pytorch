@@ -184,7 +184,12 @@ _wait_for_cpu_kernel = None
 def skip_background_threads_on_windows(f):
     @functools.wraps(f)
     def wrapped(self, **kwargs):
-        if IS_WINDOWS and SM89OrLater and kwargs.get("use_background_threads"):
+        if (
+            IS_WINDOWS
+            and SM89OrLater
+            and not TEST_WITH_ROCM
+            and kwargs.get("use_background_threads")
+        ):
             raise unittest.SkipTest("using background threads fails on Windows")
         return f(self, **kwargs)
 
@@ -708,7 +713,10 @@ class TestCuda(TestCase):
 
     # Pinned allocator background thread does not shut down cleanly on Windows
     # Python process hangs
-    @unittest.skipIf(IS_WINDOWS and SM89OrLater, "Fails on windows with SM89+")
+    @unittest.skipIf(
+        IS_WINDOWS and SM89OrLater and not TEST_WITH_ROCM,
+        "Fails on windows with SM89+",
+    )
     def test_pinned_memory_use_background_threads(self):
         script = """
 import torch
@@ -901,7 +909,10 @@ print(t.is_pinned())
 
     # CUDA memory allocations on windows do not OOM on rtx even when they cross allowed memory
     # Skip test until this is investigated
-    @unittest.skipIf(IS_WINDOWS and SM89OrLater, "Fails on windows with SM89+")
+    @unittest.skipIf(
+        IS_WINDOWS and SM89OrLater and not TEST_WITH_ROCM,
+        "Fails on windows with SM89+",
+    )
     @unittest.skipIf(
         TEST_CUDAMALLOCASYNC or IS_JETSON, "Segmentation fault (core dumped)"
     )
@@ -940,7 +951,10 @@ print(t.is_pinned())
     )
     # Same platform skips as test_out_of_memory_retry above: Windows/SM89+ does
     # not reliably OOM past the free memory, Jetson segfaults on this pattern.
-    @unittest.skipIf(IS_WINDOWS and SM89OrLater, "Fails on windows with SM89+")
+    @unittest.skipIf(
+        IS_WINDOWS and SM89OrLater and not TEST_WITH_ROCM,
+        "Fails on windows with SM89+",
+    )
     @unittest.skipIf(IS_JETSON, "Segmentation fault (core dumped)")
     @serialTest()
     def test_oom_retry_message_logged_at_info(self):
@@ -1195,7 +1209,8 @@ print("RETRIED")
         self.assertEqual(q_copy[3], torch.cuda.IntStorage(10).fill_(10))
 
     @unittest.skipIf(
-        IS_WINDOWS and SM89OrLater, "preferred_blas_library not supported on Windows"
+        IS_WINDOWS and SM89OrLater and not TEST_WITH_ROCM,
+        "preferred_blas_library not supported on Windows",
     )
     @unittest.skipIf(IS_FBCODE or IS_SANDCASTLE, "Does not work in fbcode yet")
     @setBlasBackendsToDefaultFinally
@@ -1304,7 +1319,8 @@ print("RETRIED")
         self.assertNotEqual(handle, 0)
 
     @unittest.skipIf(
-        IS_WINDOWS and SM89OrLater, "preferred_blas_library not supported on Windows"
+        IS_WINDOWS and SM89OrLater and not TEST_WITH_ROCM,
+        "preferred_blas_library not supported on Windows",
     )
     @unittest.skipIf(TEST_CUDAMALLOCASYNC, "temporarily disabled for async")
     @serialTest()
@@ -5213,7 +5229,11 @@ torch._C._cuda_setCheckpointPoolState(device, state, [], [])
         max_duration = torch.cuda.tunable.get_max_tuning_duration()
         max_iterations = torch.cuda.tunable.get_max_tuning_iterations()
         try:
-            with tempfile.TemporaryDirectory() as results_dir:
+            # TunableOp keeps the results file open, and Windows cannot delete
+            # an open file.
+            with tempfile.TemporaryDirectory(
+                ignore_cleanup_errors=IS_WINDOWS
+            ) as results_dir:
                 torch.cuda.tunable.set_filename(
                     os.path.join(results_dir, "tunableop_results.csv")
                 )
