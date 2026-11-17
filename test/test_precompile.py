@@ -6890,7 +6890,8 @@ class TestTritonRuntimeCacheTransport(TestCase):
             if consumer_exists:
                 consumer.mkdir()
                 consumer.chmod(0o750)
-                mode = 0o750
+                # Windows keeps only the read-only bit, so read the mode back.
+                mode = stat.S_IMODE(consumer.stat().st_mode)
             else:
                 probe = pathlib.Path(tmp, "probe")
                 probe.mkdir()
@@ -7593,7 +7594,10 @@ class TestPrecompileNoCompilation(TestCase):
             f.write(existing_payload)
         # The bundle stores the kernel directory in .json files as [REPLACE].
         with open(os.path.join(directory, "kernel.json"), "wb") as f:
-            f.write(b'{"path": "' + directory.encode() + b'/kernel.cubin"}')
+            # JSON-escaped, as the bundle writes it (Windows backslashes).
+            f.write(
+                b'{"path": "' + json.dumps(directory)[1:-1].encode() + b'/kernel.cubin"}'
+            )
         bundle = triton_bundler.TritonBundle(
             kernel_artifacts=[
                 triton_bundler.TritonKernelArtifacts(
@@ -9822,10 +9826,12 @@ class TestPrecompileRuntimeCache(TestCase):
             self.assertEqual(
                 (kernel_dir / "kernel.cubin").read_bytes(), b"compiled-kernel"
             )
+            children = json.loads((kernel_dir / "__grp__kernel.json").read_text())[
+                "child_paths"
+            ]
+            # The bundle spells the member with "/", Windows paths use "\\".
             self.assertEqual(
-                json.loads((kernel_dir / "__grp__kernel.json").read_text())[
-                    "child_paths"
-                ],
+                {name: os.path.normpath(path) for name, path in children.items()},
                 {"kernel.cubin": str(kernel_dir / "kernel.cubin")},
             )
             TritonBundler.read_and_emit(bundle)

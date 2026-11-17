@@ -48,12 +48,41 @@ _AUTOTUNE_SUFFIX = ".autotune.json"
 def _create_root(root: Path) -> None:
     try:
         root.mkdir(parents=True, exist_ok=True)
-    except FileExistsError:
+    except FileExistsError as exc:
+        # On Windows a file in place of a parent directory also raises
+        # FileExistsError (from the parent's mkdir); Linux raises ENOTDIR.
+        if not os.path.lexists(root):
+            raise RuntimeError(f"Cannot create Triton cache directory {root}") from exc
         raise RuntimeError(
             f"Triton cache directory {root} is not a directory"
         ) from None
     except OSError as exc:
         raise RuntimeError(f"Cannot create Triton cache directory {root}") from exc
+
+
+def _same_path(a: str | os.PathLike[str], b: str | os.PathLike[str]) -> bool:
+    """Whether two absolute paths spell the same location.
+
+    Triton records paths under knobs.cache.dir, which may spell the same
+    directory differently. On Windows, triton-windows records extended-length
+    paths ("\\\\?\\C:\\..."), and paths compare case-insensitively.
+    """
+
+    def norm(path: str | os.PathLike[str]) -> str | None:
+        path = os.fspath(path)
+        if sys.platform == "win32" and path.startswith("\\\\?\\"):
+            # Windows does not resolve "." and ".." in \\?\ paths, so such a
+            # path does not name the normalized location.
+            if any(part in (".", "..") for part in path[4:].split("\\")):
+                return None
+            if path.startswith("\\\\?\\UNC\\"):
+                path = "\\\\" + path[8:]
+            else:
+                path = path[4:]
+        return os.path.normcase(os.path.normpath(path))
+
+    norm_a, norm_b = norm(a), norm(b)
+    return norm_a is not None and norm_a == norm_b
 
 
 def runtime_cache_root(*, require_explicit: bool = False) -> Path:
@@ -75,7 +104,7 @@ def runtime_cache_root(*, require_explicit: bool = False) -> Path:
             "Triton runtime-cache transport requires an explicit absolute "
             "TRITON_CACHE_DIR"
         )
-    if configured and os.path.normpath(configured) != os.path.normpath(knobs.cache.dir):
+    if configured and not _same_path(configured, knobs.cache.dir):
         raise RuntimeError(
             "Triton runtime-cache transport requires Triton to use TRITON_CACHE_DIR"
         )
@@ -203,9 +232,9 @@ def export_runtime_cache(*, context: Any = None, exclude: Iterable[str] = ()) ->
                     member = _member_name(member)
                     # Triton records paths under knobs.cache.dir, which may
                     # spell the same directory differently.
-                    if not isinstance(original, str) or os.path.normpath(
-                        original
-                    ) != os.path.normpath(directory / member):
+                    if not isinstance(original, str) or not _same_path(
+                        original, directory / member
+                    ):
                         raise RuntimeError(
                             f"Triton runtime-cache group points outside its entry: "
                             f"{path}"
@@ -379,7 +408,7 @@ def _group_matches(path: Path, root: Path, record: dict[str, Any]) -> bool:
         and children.keys() == expected.keys()
         and all(
             isinstance(child, str)
-            and os.path.normpath(child) == os.path.normpath(expected[name])
+            and _same_path(child, expected[name])
             for name, child in children.items()
         )
     )

@@ -1,5 +1,6 @@
 import copy
 import dataclasses
+import json
 import logging
 import os
 import shutil
@@ -113,6 +114,55 @@ class TritonBundler:
     # __grp__kernel_name.json contains metadata with source code paths
     # we use this as sentinel value for search and replace
     _REPLACE_BYTES: bytes = b"[REPLACE]"
+
+    @staticmethod
+    def _json_path(path: str, ensure_ascii: bool = False) -> bytes:
+        # The kernel directory as it appears inside a JSON string. This is the
+        # path itself on POSIX, but Windows backslashes are escaped.
+        return json.dumps(path, ensure_ascii=ensure_ascii)[1:-1].encode()
+
+    @staticmethod
+    def _same_group(filename: str, existing: bytes, payload: bytes) -> bool:
+        # Triton rewrites a kernel's group file with its own spelling of the
+        # same paths (triton-windows: normalized, possibly \\?\-prefixed), so
+        # compare group files by the files they point to.
+        if not filename.startswith("__grp__"):
+            return False
+        from torch.compiler._triton_runtime_cache import _same_path
+
+        try:
+            a = json.loads(existing).get("child_paths")
+            b = json.loads(payload).get("child_paths")
+        except (ValueError, AttributeError):
+            return False
+        return (
+            isinstance(a, dict)
+            and isinstance(b, dict)
+            and a.keys() == b.keys()
+            and all(
+                isinstance(a[k], str) and isinstance(b[k], str) and _same_path(a[k], b[k])
+                for k in a
+            )
+        )
+
+    @staticmethod
+    def _json_path_spellings(path: str) -> list[bytes]:
+        # Triton writes JSON with the default ensure_ascii=True, so a non-ASCII
+        # directory appears \u-escaped; match both spellings.
+        if not _IS_WINDOWS:
+            paths = [path]
+        else:
+            # triton-windows records normalized extended-length paths
+            # (\\?\C:\...\<hash>\<file>), while the cache directory may be
+            # spelled with "/". Try the longest spellings first.
+            normal = list(dict.fromkeys([os.path.normpath(path), path]))
+            paths = ["\\\\?\\" + p for p in normal] + normal
+        spellings = [
+            TritonBundler._json_path(p, ensure_ascii)
+            for p in paths
+            for ensure_ascii in (False, True)
+        ]
+        return list(dict.fromkeys(spellings))
 
     @staticmethod
     def is_enabled() -> bool:
@@ -328,9 +378,12 @@ class TritonBundler:
                                             "Bundle contains illegal bytes"
                                         )
                                     # Remove the path from payload
-                                    payload = payload.replace(
-                                        str.encode(path), TritonBundler._REPLACE_BYTES
-                                    )
+                                    for spelling in TritonBundler._json_path_spellings(
+                                        path
+                                    ):
+                                        payload = payload.replace(
+                                            spelling, TritonBundler._REPLACE_BYTES
+                                        )
                                 artifacts.append(
                                     TritonKernelArtifact(filename, payload)
                                 )
@@ -384,10 +437,15 @@ class TritonBundler:
                 payload = artifact.payload
                 if artifact.filename.endswith(".json"):
                     payload = payload.replace(
-                        TritonBundler._REPLACE_BYTES, str.encode(directory)
+                        TritonBundler._REPLACE_BYTES, TritonBundler._json_path(directory)
                     )
                 path = Path(directory) / artifact.filename
-                if not path.is_file() or path.read_bytes() != payload:
+                if not path.is_file() or (
+                    path.read_bytes() != payload
+                    and not TritonBundler._same_group(
+                        artifact.filename, path.read_bytes(), payload
+                    )
+                ):
                     raise PrecompileError(
                         "precompile.no_compilation() found an incomplete or "
                         f"incompatible Triton kernel file in the cache: {path}"
@@ -467,7 +525,7 @@ class TritonBundler:
                         payload = artifact.payload
                         if artifact.filename.endswith(".json"):
                             payload = payload.replace(
-                                TritonBundler._REPLACE_BYTES, str.encode(directory)
+                                TritonBundler._REPLACE_BYTES, TritonBundler._json_path(directory)
                             )
                         file.write(payload)
                     counters["inductor"]["triton_bundler_read_and_emit_kernel"] += 1
