@@ -132,6 +132,38 @@ bool should_round_gfx942_tf32_inputs_to_nearest(
           at::Float32Precision::TF32 &&
       is_gfx942_device(input.get_device());
 }
+
+bool is_gfx1151_device(const DeviceIndex device_index) {
+  TORCH_INTERNAL_ASSERT(
+      device_index >= 0 && device_index < C10_COMPILE_TIME_MAX_GPUS);
+
+  static std::array<c10::once_flag, C10_COMPILE_TIME_MAX_GPUS> once_flags;
+  static std::array<bool, C10_COMPILE_TIME_MAX_GPUS> results{};
+  c10::call_once(once_flags[device_index], [device_index] {
+    static const std::vector<std::string> gfx1151_archs{"gfx1151"};
+    results[device_index] =
+        at::detail::getCUDAHooks().isGPUArch(gfx1151_archs, device_index);
+  });
+  return results[device_index];
+}
+
+// On gfx1151, rocBLAS's strided-batched bf16 x bf16 -> fp32 GEMM loses
+// precision when the result has a single row or column (batched
+// matrix-vector products): the fp32 result is only as accurate as bf16 (e.g.
+// errors up to 0.05 on values around 20 for 16 x 32 x 1 with K = 32, ROCm 10.3),
+// while the same products of the inputs converted to fp32, or one GEMM per
+// batch, are accurate. hipBLASLt does not support these shapes
+// (HIPBLAS_STATUS_NOT_SUPPORTED) and falls back to rocBLAS, so both BLAS
+// backends hit it. bf16 converts to fp32 exactly, so computing in fp32 gives
+// the result asked for.
+bool should_compute_bf16_bmm_in_fp32(
+    const Tensor& result,
+    const Tensor& batch1) {
+  return batch1.scalar_type() == ScalarType::BFloat16 &&
+      result.scalar_type() == ScalarType::Float && result.size(0) > 1 &&
+      (result.size(1) == 1 || result.size(2) == 1) &&
+      is_gfx1151_device(result.get_device());
+}
 #endif
 
 std::pair<Tensor, Tensor> round_gfx942_tf32_operands_to_nearest_if_needed(
@@ -775,6 +807,17 @@ const Tensor& baddbmm_out_cuda_impl(const Tensor& result, const Tensor& self, co
       return result.mul_(beta);
     }
   }
+#ifdef USE_ROCM
+  if (should_compute_bf16_bmm_in_fp32(result, batch1)) {
+    return baddbmm_out_cuda_impl(
+        result,
+        self,
+        batch1.to(ScalarType::Float),
+        batch2.to(ScalarType::Float),
+        beta,
+        alpha);
+  }
+#endif
 
   bool transpose_result = false;
   c10::MaybeOwned<Tensor> result_;

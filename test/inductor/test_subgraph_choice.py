@@ -22,6 +22,7 @@ from torch._inductor.utils import run_and_get_code
 from torch.testing._internal.common_utils import (
     decorateIf,
     instantiate_parametrized_tests,
+    isRocmArchAnyOf,
     parametrize,
 )
 from torch.testing._internal.inductor_utils import GPU_TYPE, HAS_CPU, HAS_GPU
@@ -114,6 +115,22 @@ class TestSubgraphChoice(TestCase):
                 self.skipTest(
                     f"covered when run with TRITON_USE_META_WS={int(meta_ws)}"
                 )
+        if (
+            backend == "aten"
+            and dtype == torch.bfloat16
+            and isRocmArchAnyOf(("gfx1151",))
+            and torch.backends.cuda.preferred_blas_library()
+            == torch._C._BlasBackend.Cublaslt
+        ):
+            # The exact comparison below needs the partial BMM to sum the
+            # small-integer products exactly in fp32. hipBLASLt's bf16 x bf16
+            # -> fp32 GEMMs on gfx1151 do not: for these 8 x 300 x 136 x 1025
+            # partials, 125,135 of 326,400 fp32 outputs are off the exact
+            # integer by up to 2.8e-5 (rocBLAS: none), which moves bf16 ties.
+            self.skipTest(
+                "hipBLASLt bf16 GEMMs with fp32 output on gfx1151 do not "
+                "accumulate small-integer products exactly"
+            )
         # Config 1 is a 2CTA config, which only runs as 2CTA under MetaWS.
         two_ctas = backend == "triton" and meta_ws and config_index == 1
 
