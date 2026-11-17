@@ -711,12 +711,16 @@ class ConfigFuzzer:
         """
         Tests a config by calling the function produced by the factory function.
         """
-        original_handler = signal.signal(signal.SIGALRM, self.timeout_handler)
-        signal.alarm(self.test_timeout)
+        # SIGALRM does not exist on Windows; there the test runs without a timeout.
+        has_alarm = hasattr(signal, "SIGALRM")
+        if has_alarm:
+            original_handler = signal.signal(signal.SIGALRM, self.timeout_handler)
+            signal.alarm(self.test_timeout)
         print(f"Testing config {config}")
         config_tuple = tuple(config.keys())
         if ret := results.lookup(config_tuple):
-            signal.signal(signal.SIGALRM, original_handler)
+            if has_alarm:
+                signal.signal(signal.SIGALRM, original_handler)
             return ret
 
         def print_config() -> None:
@@ -736,7 +740,8 @@ class ConfigFuzzer:
             print_traceback: bool,
             exc: Exception | None,
         ) -> Status:
-            signal.signal(signal.SIGALRM, original_handler)
+            if has_alarm:
+                signal.signal(signal.SIGALRM, original_handler)
             print(f"{message} with config combination:")
             print_config()
             if exc:

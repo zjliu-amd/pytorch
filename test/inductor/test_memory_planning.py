@@ -313,15 +313,17 @@ class TestMemoryPlanning(TestCase):
             lambda: AOTIRunnerUtil.run(f, args, dynamic_shapes=dynamic_shapes)
         )
 
+        # int64_t literals take LL on Windows and macOS (printers.py).
+        L = "LL" if sys.platform in ["darwin", "win32"] else "L"
         FileCheck().check(
-            "int64_t int_array_0[] = {24L + align(12L*s6), };"
-        ).check_next("int64_t int_array_1[] = {1L, };").check_next(
+            f"int64_t int_array_0[] = {{24{L} + align(12{L}*s6), }};"
+        ).check_next(f"int64_t int_array_1[] = {{1{L}, }};").check_next(
             "AtenTensorHandle pool1_handle;"
         ).check_next(
             "aoti_torch_empty_strided(1, int_array_0, int_array_1,"
         ).check_next("RAIIAtenTensorHandle pool1(pool1_handle);").check_next(
-            "int64_t int_array_2[] = {s6, 3L};"
-        ).check_next("int64_t int_array_3[] = {3L, 1L};").check_next(
+            f"int64_t int_array_2[] = {{s6, 3{L}}};"
+        ).check_next(f"int64_t int_array_3[] = {{3{L}, 1{L}}};").check_next(
             "AtenTensorHandle tmp_tensor_handle_0;"
         ).check_next("aoti_torch__alloc_from_pool(pool1, 0").run(code)
         self.assertTrue(same(f(*args), result))

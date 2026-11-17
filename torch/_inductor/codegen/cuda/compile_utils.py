@@ -120,7 +120,7 @@ def _cuda_driver_lib_dirs() -> list[str]:
     if env_ld_library_path:
         dirs.extend(
             path
-            for path in env_ld_library_path.split(":")
+            for path in env_ld_library_path.split(os.pathsep)
             if path and os.path.exists(os.path.join(path, "libcuda.so.1"))
         )
 

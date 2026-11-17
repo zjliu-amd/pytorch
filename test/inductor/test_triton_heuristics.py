@@ -2049,13 +2049,13 @@ class TestGridExprMaximum(TestCase):
         from torch._inductor.runtime.triton_heuristics import Grid1D
 
         grid = Grid1D(inductor_meta={}, mode="cpp")
-        # Mixed str/int: int constants must be cast to (long) for std::max
+        # Mixed str/int: int constants must be cast to (int64_t) for std::max
         result = grid.maximum(["ynumel_0", "ynumel_1", 4480])
-        self.assertIn("(long)4480", result)
+        self.assertIn("(int64_t)4480", result)
         self.assertIn("std::max", result)
         # All strings: no cast needed
         result = grid.maximum(["xnumel", "ynumel"])
-        self.assertNotIn("(long)", result)
+        self.assertNotIn("(int64_t)", result)
         # All ints: constant-folds
         self.assertEqual(grid.maximum([10, 20, 5]), 20)
 
