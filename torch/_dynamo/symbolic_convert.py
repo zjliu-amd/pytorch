@@ -5381,7 +5381,8 @@ class InstructionTranslatorBase(
 
     def is_co_filename_from_nn_modules(self) -> bool:
         filename = getattr(self.f_code, "co_filename", "<unknown>")
-        nn_modules_pattern = re.compile(r".*torch/nn/modules.*")
+        # Match both path separators so the filter also works on Windows.
+        nn_modules_pattern = re.compile(r".*torch[/\\]nn[/\\]modules.*")
         return nn_modules_pattern.match(filename) is not None
 
     def store_global_weakref_by_id(self, prefix: str, value: object) -> str:

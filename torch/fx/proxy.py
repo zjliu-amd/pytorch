@@ -303,7 +303,7 @@ class TracerBase:
                 for frame in user_stack_summary
                 if (
                     frame.name == "forward"
-                    or frame.filename.endswith("torch/__init__.py")
+                    or frame.filename.replace("\\", "/").endswith("torch/__init__.py")
                     or (frame.filename, frame.name) in _STACK_TRACE_ANCHORS
                 )
             ]
@@ -396,7 +396,9 @@ class TracerBase:
         while frame:
             frame = frame.f_back
             if frame and all(
-                not frame.f_code.co_filename.endswith(file) for file in pt_files
+                # Normalize Windows path separators before the suffix match.
+                not frame.f_code.co_filename.replace("\\", "/").endswith(file)
+                for file in pt_files
             ):
                 break
 
