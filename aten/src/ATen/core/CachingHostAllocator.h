@@ -316,7 +316,16 @@ struct CachingHostAllocatorImpl {
   virtual ~CachingHostAllocatorImpl() {
     if (active_) {
       active_ = false;
+#if !defined(_WIN32)
       getBackgroundThreadPool()->waitWorkComplete();
+#else
+      // The allocator is a static object, so this runs during process exit.
+      // On Windows, ExitProcess terminates every other thread before static
+      // destructors run, so the background thread never sees active_ turn
+      // false and the pool never reports its task complete: waiting here
+      // deadlocks the exiting process. The thread is already gone, so there
+      // is nothing to wait for.
+#endif
     }
   }
 
