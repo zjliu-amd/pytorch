@@ -18,6 +18,7 @@
 #endif
 
 #include <cmath>
+#include <type_traits>
 #include <utility>
 
 namespace at::native {
@@ -106,6 +107,35 @@ __device__ inline bool isinf_device(at::Half v) {
   return ::isinf(static_cast<float>(v));
 }
 
+#if defined(USE_ROCM)
+// c10::BFloat16 and c10::Half arithmetic rounds to T after every operation, as
+// on CUDA. HIP compiles with -ffp-contract=fast, so LLVM narrows the
+// operators' float math to bf16 or fp16 operations that it may contract, and
+// fuses the multiply and add of running + c * (curr - running) into one FMA,
+// skipping the rounding of the product (on gfx1151, 2% of random bf16 updates
+// differ from the per-operation result by one ulp). Spell the update out in
+// float, with a conversion to T after each operation and contraction off.
+template <typename T>
+__device__ inline T moving_average_update_rounded(T running, T curr, T c) {
+#pragma clang fp contract(off)
+  const T diff =
+      static_cast<T>(static_cast<float>(curr) - static_cast<float>(running));
+  const T delta = static_cast<T>(static_cast<float>(c) * static_cast<float>(diff));
+  return static_cast<T>(static_cast<float>(running) + static_cast<float>(delta));
+}
+#endif
+
+template <typename T>
+__device__ inline T moving_average_update(T running, T curr, T c) {
+#if defined(USE_ROCM)
+  if constexpr (
+      std::is_same_v<T, c10::BFloat16> || std::is_same_v<T, at::Half>) {
+    return moving_average_update_rounded(running, curr, c);
+  }
+#endif
+  return running + c * (curr - running);
+}
+
 // CUDA kernel to compute Moving Average Min/Max of the tensor.
 // It uses the running_min and running_max along with averaging const, c.
 // The formula used to compute the new min/max is as follows
@@ -130,13 +160,13 @@ __global__ void MovingAverageMinMax(
 
       T averaging_const_t = static_cast<T>(averaging_const);
 
-      T adjusted_min = isinf_device(running_min[i]) ? curr_min
-                                                    : (running_min[i]) +
-              averaging_const_t * (curr_min - (running_min[i]));
+      T adjusted_min = isinf_device(running_min[i])
+          ? curr_min
+          : moving_average_update(running_min[i], curr_min, averaging_const_t);
 
-      T adjusted_max = isinf_device(running_max[i]) ? curr_max
-                                                    : (running_max[i]) +
-              averaging_const_t * (curr_max - (running_max[i]));
+      T adjusted_max = isinf_device(running_max[i])
+          ? curr_max
+          : moving_average_update(running_max[i], curr_max, averaging_const_t);
 
       running_min[i] = adjusted_min;
       running_max[i] = adjusted_max;
