@@ -425,7 +425,23 @@ class MixOrderReductionTest(TestBase):
         num_sm = DeviceProperties.create(torch.device(GPU_TYPE)).multi_processor_count
         M = min(M, 262144 * num_sm)
         x = torch.randn(M, 2, dtype=torch.float, device=GPU_TYPE)
-        self.check_numeric(f, (x,))
+        # The split heuristic scales with the multiprocessor count, and the
+        # ROCm M is sized for gfx950 (256 CUs). Smaller GPUs (gfx1151: 20)
+        # would make only a 2-layer split.
+        create = DeviceProperties.create
+
+        def large_gpu(cls, device):
+            props = create(device)
+            if (
+                torch.version.hip is not None
+                and props.multi_processor_count
+                and props.multi_processor_count < 256
+            ):
+                props = props._replace(multi_processor_count=256)
+            return props
+
+        with mock.patch.object(DeviceProperties, "create", classmethod(large_gpu)):
+            self.check_numeric(f, (x,))
         # We don't do mix order reduction for split redutions
         # with more than 2 layers
         self.assertEqual(

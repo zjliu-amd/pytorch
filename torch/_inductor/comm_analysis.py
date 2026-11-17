@@ -717,14 +717,14 @@ def estimate_nccl_collective_runtime_impl(
     selecting the (algo, proto) pair that minimizes estimated time.
     """
     if group_size <= 1:
-        return 0
+        return 0.0
 
     if coll == NCCL_COLL.UNSUPPORTED:
-        return 0
+        return 0.0
 
     time_us, _, _ = _nccl_best_algo_time(tensor_storage_size_bytes, group_size, coll)
     if time_us < 0 or time_us == float("inf"):
-        return 0
+        return 0.0
     return time_us / 1000.0
 
 

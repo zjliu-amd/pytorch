@@ -164,7 +164,11 @@ class SymmetricMMTest(TestCase):
         self._check_symmetric_compile(fn, x, uses_quack=True)
 
     def test_quack_grouped_symmetric_mm(self, device):
-        if torch.cuda.get_device_capability(device)[0] not in (10, 11):
+        # On ROCm the capability major is the gfx major (gfx1151 -> 11).
+        if (
+            torch.version.hip is not None
+            or torch.cuda.get_device_capability(device)[0] not in (10, 11)
+        ):
             self.skipTest("requires SM100 or SM110")
 
         from torch._vendor.quack.gemm_interface import gemm_symmetric_out

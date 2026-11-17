@@ -331,6 +331,15 @@ class TestCommAnalysis(TestCase):
         try:
             metrics.reset()
             torch._logging.set_logs(inductor_metrics=True)
+            # GPUs without an interconnect model (RDNA: PCIe only) estimate
+            # from the configured bandwidths alone, and 0 without them. With
+            # fewer local GPUs than WORLD_SIZE the group spans several nodes.
+            from torch._inductor.comm_analysis import get_gpu_type
+
+            if get_gpu_type() is None:
+                self._test_snode_stack.enter_context(
+                    config.patch(intra_node_bw=24.0, inter_node_bw=25.0)
+                )
             torch.compile(fn)(*inps)
             found_collective = False
             for snode, runtime in metrics.node_runtimes:
