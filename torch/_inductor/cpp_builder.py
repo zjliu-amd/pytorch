@@ -448,6 +448,36 @@ def _normalize_device_type(device_type: str) -> str:
         return device_type
 
 
+@functools.cache
+def _warn_windows_rocm_cpu_compiler_fallback() -> None:
+    log.warning(
+        "ROCm clang-cl not found; compiling Inductor CPU code with cl and "
+        "without AVX2/AVX512 vectorization. cl passes vector arguments in "
+        "16-byte-aligned temporaries, and the clang-cl-built Sleef in this "
+        "Windows ROCm build reads them with aligned loads, so vectorized "
+        "kernels would crash (0xC0000005)."
+    )
+
+
+def _get_windows_rocm_cpu_compiler() -> str:
+    """
+    C++ compiler for Inductor CPU code in a Windows ROCm build.
+
+    Windows ROCm torch (including the sleef.lib that CPU kernels link) is built
+    with clang-cl. MSVC x64 passes __m256/__m512 arguments by pointer to
+    temporaries it aligns to 16 bytes only, while the clang-built Sleef
+    functions read them with aligned 32/64-byte moves, so cl-built AVX2/AVX512
+    kernels crash with 0xC0000005 in Sleef (e.g. Sleef_powf16_u10). Use the
+    ROCm clang-cl, as for GPU code; fall back to cl (unvectorized, see
+    cpu_vec_isa.pick_vec_isa) if it cannot be found.
+    """
+    clang_cl = _get_rocm_clang_cl_windows()
+    if os.path.isfile(clang_cl) or shutil.which(clang_cl):
+        return clang_cl
+    _warn_windows_rocm_cpu_compiler_fallback()
+    return "cl"
+
+
 def get_cpp_compiler(device_type: str | None = None) -> str:
     if (
         config.aot_inductor.cross_target_platform == "windows"
@@ -464,11 +494,16 @@ def get_cpp_compiler(device_type: str | None = None) -> str:
         if compiler is None:
             if device_type is not None:
                 device_type = _normalize_device_type(device_type)
-            compiler = (
-                _get_rocm_clang_cl_windows()
-                if device_type == "cuda" and torch.version.hip is not None
-                else "cl"
-            )
+            if torch.version.hip is None:
+                compiler = "cl"
+            elif device_type == "cuda":
+                compiler = _get_rocm_clang_cl_windows()
+            elif device_type is not None and device_type.split(":")[0] == "cuda":
+                # "cuda:<index>" that torch.device could not parse.
+                raise RuntimeError(f"Invalid device type: {device_type!r}")
+            else:
+                # CPU, unspecified, and out-of-tree CPU-like devices.
+                compiler = _get_windows_rocm_cpu_compiler()
         compiler = normalize_path_separator(compiler)
         check_compiler_exist_windows(compiler)
         check_msvc_cl_language_id(compiler)
@@ -1052,7 +1087,9 @@ def _get_ffast_math_flags() -> list[str]:
     return flags
 
 
-def _get_inductor_debug_symbol_cflags() -> tuple[list[str], list[str]]:
+def _get_inductor_debug_symbol_cflags(
+    cpp_compiler: str | None = None,
+) -> tuple[list[str], list[str]]:
     """
     When we turn on generate debug symbol.
     On Windows, it should create a [module_name].pdb file. It helps debug by WinDBG.
@@ -1062,7 +1099,12 @@ def _get_inductor_debug_symbol_cflags() -> tuple[list[str], list[str]]:
     ldflags: list[str] = []
 
     if _IS_WINDOWS:
-        cflags = ["ZI", "_DEBUG"]
+        if cpp_compiler is not None and _is_clang(cpp_compiler):
+            # clang-cl rejects "/_DEBUG" (which cl ignores as an unknown
+            # option) and has no edit-and-continue /ZI.
+            cflags = ["Z7"]
+        else:
+            cflags = ["ZI", "_DEBUG"]
         ldflags = ["DEBUG", "ASSEMBLYDEBUG ", "OPT:REF", "OPT:ICF"]
     else:
         cflags.append("g")
@@ -1196,7 +1238,7 @@ def _get_optimization_cflags(
             cflags += ["O0"]
 
     if should_add_debug_symbol_flags:
-        debug_cflags, debug_ldflags = _get_inductor_debug_symbol_cflags()
+        debug_cflags, debug_ldflags = _get_inductor_debug_symbol_cflags(cpp_compiler)
         cflags += debug_cflags
         ldflags += debug_ldflags
 
@@ -1637,6 +1679,36 @@ def perload_icx_libomp_win(cpp_compiler: str) -> None:
         _load_icx_built_in_lib_by_name(cpp_compiler, lib_name)
 
 
+@functools.cache
+def _torch_intel_openmp_lib_dir_win() -> str | None:
+    """Directory of libiomp5md.lib when this Windows ROCm torch uses Intel OpenMP.
+
+    Returns None when torch does not ship libiomp5md.dll (then the generated
+    code uses clang's libomp). Raises when torch uses libiomp5md.dll but no
+    import library is found: linking clang's libomp instead would load a second
+    OpenMP runtime and abort with "OMP: Error #15" in the first parallel kernel.
+    """
+    if not _IS_WINDOWS or torch.version.hip is None:
+        return None
+    from torch.utils.cpp_extension import TORCH_LIB_PATH
+
+    if not os.path.isfile(os.path.join(TORCH_LIB_PATH, "libiomp5md.dll")):
+        return None
+    for lib_dir in (
+        TORCH_LIB_PATH,
+        os.path.join(sys.prefix, "Library", "lib"),
+        os.path.join(sys.base_prefix, "Library", "lib"),
+    ):
+        if os.path.isfile(os.path.join(lib_dir, "libiomp5md.lib")):
+            return lib_dir
+    raise RuntimeError(
+        "torch uses Intel OpenMP (libiomp5md.dll in torch/lib), but its import "
+        "library libiomp5md.lib was not found in torch/lib or "
+        "<prefix>\\Library\\lib. Install it (pip install intel-openmp) so "
+        "Inductor C++ code links the same OpenMP runtime as torch."
+    )
+
+
 def _get_openmp_args(
     cpp_compiler: str,
 ) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str]]:
@@ -1712,8 +1784,19 @@ def _get_openmp_args(
         """
         if _is_clang(cpp_compiler):
             cflags.append("openmp")
-            libs.append("libomp")
-            perload_clang_libomp_win(cpp_compiler, "libomp.dll")
+            iomp_lib_dir = _torch_intel_openmp_lib_dir_win()
+            if iomp_lib_dir is not None:
+                # torch itself runs on Intel OpenMP (libiomp5md.dll, MKL
+                # builds). Linking the generated code against clang's
+                # libomp loads a second OpenMP runtime into the process, which
+                # aborts with "OMP: Error #15". Use torch's runtime instead:
+                # the __kmpc_* entry points clang emits are the same ABI.
+                lib_dir_paths.append(iomp_lib_dir)
+                libs.append("libiomp5md")
+                ldflags.append("nodefaultlib:libomp.lib")
+            else:
+                libs.append("libomp")
+                perload_clang_libomp_win(cpp_compiler, "libomp.dll")
         elif _is_intel_compiler(cpp_compiler):
             cflags.append("Qiopenmp")
             libs.append("libiomp5md")

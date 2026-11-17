@@ -81,40 +81,51 @@ class TestGetRocmClangClWindows(TestCase):
 @instantiate_parametrized_tests
 class TestGetCppCompilerWindows(TestCase):
     @parametrize(
-        "hip,device_type,cxx,expected,uses_rocm_default",
+        "hip,device_type,cxx,expected,uses_rocm_default,clang_cl_found",
         [
             subtest(
-                ("7.14.0", "cuda", None, THEROCK_CLANG_CL, True),
+                ("7.14.0", "cuda", None, THEROCK_CLANG_CL, True, True),
                 name="rocm_cuda_default",
             ),
             subtest(
-                ("7.14.0", "cuda:0", None, THEROCK_CLANG_CL, True),
+                ("7.14.0", "cuda:0", None, THEROCK_CLANG_CL, True, True),
                 name="rocm_indexed_cuda_default",
             ),
+            # Windows ROCm builds compile CPU code with the ROCm clang-cl too
+            # (cl-built vector kernels misalign arguments to the clang-built
+            # Sleef), and fall back to cl when clang-cl cannot be found.
             subtest(
-                ("7.14.0", "cpu", None, "cl", False),
+                ("7.14.0", "cpu", None, THEROCK_CLANG_CL, True, True),
                 name="rocm_cpu_default",
             ),
             subtest(
-                ("7.14.0", None, None, "cl", False),
+                ("7.14.0", None, None, THEROCK_CLANG_CL, True, True),
                 name="rocm_no_device_default",
             ),
             subtest(
-                (None, "cuda", None, "cl", False),
+                ("7.14.0", "cpu", None, "cl", True, False),
+                name="rocm_cpu_clang_cl_missing",
+            ),
+            subtest(
+                (None, "cuda", None, "cl", False, True),
                 name="non_rocm_default",
             ),
             subtest(
-                ("7.14.0", "cuda", "my-clang-cl", "my-clang-cl", False),
+                (None, "cpu", None, "cl", False, True),
+                name="non_rocm_cpu_default",
+            ),
+            subtest(
+                ("7.14.0", "cuda", "my-clang-cl", "my-clang-cl", False, True),
                 name="rocm_cxx_override",
             ),
             subtest(
-                (None, None, "icx", "icx", False),
+                (None, None, "icx", "icx", False, True),
                 name="non_rocm_cxx_override",
             ),
         ],
     )
     def test_compiler_selection(
-        self, hip, device_type, cxx, expected, uses_rocm_default
+        self, hip, device_type, cxx, expected, uses_rocm_default, clang_cl_found
     ):
         env = dict(os.environ)
         env.pop("CXX", None)
@@ -132,8 +143,13 @@ class TestGetCppCompilerWindows(TestCase):
                 "_get_rocm_clang_cl_windows",
                 return_value=THEROCK_CLANG_CL_WINDOWS,
             ) as rocm_compiler,
+            mock.patch.object(
+                cpp_builder.os.path, "isfile", return_value=clang_cl_found
+            ),
+            mock.patch.object(cpp_builder.shutil, "which", return_value=None),
             mock.patch.dict(os.environ, env, clear=True),
         ):
+            cpp_builder._warn_windows_rocm_cpu_compiler_fallback.cache_clear()
             compiler = cpp_builder.get_cpp_compiler(device_type=device_type)
 
         self.assertEqual(compiler, expected)
