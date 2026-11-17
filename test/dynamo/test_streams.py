@@ -951,6 +951,9 @@ class <lambda>(torch.nn.Module):
             torch.Stream(device=device),
             torch.Stream(device=device),
         )
+        # fn's side streams do not wait for the default-stream kernels that
+        # produced the inputs, so let those finish first.
+        torch.accelerator.synchronize()
         expected = fn(*inp)
         (
             actual,
@@ -959,6 +962,8 @@ class <lambda>(torch.nn.Module):
             _,
         ) = extract_graph(fn, *inp)
         self.assertEqual(len(fw_graphs), 1)
+        # Side-stream results are read back on the default stream.
+        torch.accelerator.synchronize()
         self.assertEqual(expected, actual)
         self.assertExpectedInline(
             print_graph(fw_graphs[0]),
@@ -984,12 +989,17 @@ class <lambda>(torch.nn.Module):
             with s1:
                 z1 = torch.add(x, y)
             with s2:
+                # z1 comes from s1.
+                s2.wait_stream(s1)
                 z = torch.add(x, y)
                 y = z + 2 + z1
 
             return y
 
         inp = (torch.ones(2, 2, device=device) + 1, torch.ones(2, 2, device=device))
+        # fn's side streams do not wait for the default-stream kernels that
+        # produced the inputs, so let those finish first.
+        torch.accelerator.synchronize()
         expected = fn(*inp)
         (
             actual,
@@ -998,6 +1008,8 @@ class <lambda>(torch.nn.Module):
             _,
         ) = extract_graph(fn, *inp)
         self.assertEqual(len(fw_graphs), 1)
+        # Side-stream results are read back on the default stream.
+        torch.accelerator.synchronize()
         self.assertEqual(expected, actual)
         self.assertExpectedInline(
             print_graph(fw_graphs[0]),
@@ -1007,13 +1019,28 @@ class <lambda>(torch.nn.Module):
         # Annotation: {'stream': 2}
         add: "f32[2, 2]" = torch.ops.aten.add.Tensor(arg0_1, arg1_1)
 
+        # No stacktrace found for following nodes
+        subgraph_wait_stream = self.subgraph_wait_stream
+        control_deps = torch.ops.higher_order.control_deps((add, arg0_1, arg1_1), subgraph_wait_stream, add, arg0_1, arg1_1);  add = arg0_1 = arg1_1 = subgraph_wait_stream = None
+        getitem_2: "f32[2, 2]" = control_deps[3]
+        getitem_1: "f32[2, 2]" = control_deps[2]
+
+        # Annotation: {'stream': 2}
+        getitem: "f32[2, 2]" = control_deps[1];  control_deps = None
+
         # Annotation: {'stream': 1}
-        add_1: "f32[2, 2]" = torch.ops.aten.add.Tensor(arg0_1, arg1_1);  arg0_1 = arg1_1 = None
+        add_1: "f32[2, 2]" = torch.ops.aten.add.Tensor(getitem_1, getitem_2);  getitem_1 = getitem_2 = None
 
         # Annotation: {'stream': 1}
         add_2: "f32[2, 2]" = torch.ops.aten.add.Tensor(add_1, 2);  add_1 = None
-        add_3: "f32[2, 2]" = torch.ops.aten.add.Tensor(add_2, add);  add_2 = add = None
+        add_3: "f32[2, 2]" = torch.ops.aten.add.Tensor(add_2, getitem);  add_2 = getitem = None
         return (add_3,)
+
+    class subgraph_wait_stream(torch.nn.Module):
+        def forward(self, dep_0: "f32[2, 2]", dep_1: "f32[2, 2]", dep_2: "f32[2, 2]"):
+            # Annotation: {'stream': 1}
+            wait_stream_default = torch.ops.streams.wait_stream.default(1, 2)
+            return (wait_stream_default, dep_0, dep_1, dep_2)
 """,
         )
 
@@ -1033,6 +1060,9 @@ class <lambda>(torch.nn.Module):
             return z0, y
 
         inp = (torch.ones(2, 2, device=device) + 1, torch.ones(2, 2, device=device))
+        # fn's side streams do not wait for the default-stream kernels that
+        # produced the inputs, so let those finish first.
+        torch.accelerator.synchronize()
         expected = fn(*inp)
         (
             actual,
@@ -1041,6 +1071,8 @@ class <lambda>(torch.nn.Module):
             _,
         ) = extract_graph(fn, *inp)
         self.assertEqual(len(fw_graphs), 1)
+        # Side-stream results are read back on the default stream.
+        torch.accelerator.synchronize()
         self.assertEqual(expected, actual)
         self.assertExpectedInline(
             print_graph(fw_graphs[0]),
@@ -2631,8 +2663,13 @@ class GraphModule(torch.nn.Module):
         # mutation; separate inputs because fn mutates in place.
         x_eager = torch.ones(2, 2, device=device)
         x_compiled = torch.ones(2, 2, device=device)
+        # fn's side streams do not wait for the default-stream kernels that
+        # produced the inputs, so let those finish first.
+        torch.accelerator.synchronize()
         expected = fn(x_eager)
         actual = torch.compile(fn, backend=backend, fullgraph=True)(x_compiled)
+        # Side-stream results are read back on the default stream.
+        torch.accelerator.synchronize()
         self.assertEqual(expected, actual)
 
         self.assertEqual(len(backend.graphs), 1)
@@ -2671,8 +2708,13 @@ class GraphModule(torch.nn.Module):
         # mutation; separate inputs because fn mutates in place.
         x_eager = torch.ones(2, 2, device=device)
         x_compiled = torch.ones(2, 2, device=device)
+        # fn's side streams do not wait for the default-stream kernels that
+        # produced the inputs, so let those finish first.
+        torch.accelerator.synchronize()
         expected = fn(x_eager)
         actual = torch.compile(fn, backend=backend, fullgraph=True)(x_compiled)
+        # Side-stream results are read back on the default stream.
+        torch.accelerator.synchronize()
         self.assertEqual(expected, actual)
 
         self.assertEqual(len(backend.graphs), 1)
@@ -2717,8 +2759,13 @@ class GraphModule(torch.nn.Module):
         # mutation; separate inputs because fn mutates in place.
         x_eager = torch.ones(2, 2, device=device)
         x_compiled = torch.ones(2, 2, device=device)
+        # fn's side streams do not wait for the default-stream kernels that
+        # produced the inputs, so let those finish first.
+        torch.accelerator.synchronize()
         expected = fn(x_eager)
         actual = torch.compile(fn, backend=backend, fullgraph=True)(x_compiled)
+        # Side-stream results are read back on the default stream.
+        torch.accelerator.synchronize()
         self.assertEqual(expected, actual)
 
         self.assertEqual(len(backend.graphs), 1)
@@ -2770,8 +2817,13 @@ class GraphModule(torch.nn.Module):
         # mutation; separate inputs because fn mutates in place.
         x_eager = torch.ones(2, 2, device=device)
         x_compiled = torch.ones(2, 2, device=device)
+        # fn's side streams do not wait for the default-stream kernels that
+        # produced the inputs, so let those finish first.
+        torch.accelerator.synchronize()
         expected = fn(x_eager)
         actual = torch.compile(fn, backend=backend, fullgraph=True)(x_compiled)
+        # Side-stream results are read back on the default stream.
+        torch.accelerator.synchronize()
         self.assertEqual(expected, actual)
 
         self.assertEqual(len(backend.graphs), 1)
@@ -2806,9 +2858,14 @@ class GraphModule(torch.nn.Module):
         # Separate inputs because fn mutates its argument.
         x_eager = torch.ones(2, 2, device=device)
         x_compiled = torch.ones(2, 2, device=device)
+        # fn's side streams do not wait for the default-stream kernels that
+        # produced the inputs, so let those finish first.
+        torch.accelerator.synchronize()
         expected = fn(x_eager)
         out = torch.compile(fn, backend="eager", fullgraph=True)(x_compiled)
         self.assertEqual(len(out), 0)
+        # Side-stream results are read back on the default stream.
+        torch.accelerator.synchronize()
         self.assertEqual(out, expected)
         self.assertEqual(x_eager, x_compiled)
 
@@ -2845,8 +2902,13 @@ class GraphModule(torch.nn.Module):
         # mutation; separate inputs because fn mutates in place.
         x_eager = torch.ones(2, 2, device=device)
         x_compiled = torch.ones(2, 2, device=device)
+        # fn's side streams do not wait for the default-stream kernels that
+        # produced the inputs, so let those finish first.
+        torch.accelerator.synchronize()
         expected = fn(x_eager)
         actual = torch.compile(fn, backend=backend, fullgraph=True)(x_compiled)
+        # Side-stream results are read back on the default stream.
+        torch.accelerator.synchronize()
         self.assertEqual(expected, actual)
 
         self.assertEqual(len(backend.graphs), 1)
@@ -3545,15 +3607,24 @@ class <lambda>(torch.nn.Module):
             with torch.accelerator.current_stream(device):
                 cur_id = torch.accelerator.current_stream(device).stream_id
                 y = x + 1
+            # y comes from the stream that was current above.
+            s.wait_stream(torch.accelerator.current_stream(device))
             with s:
                 return y * 2, cur_id
 
         x = torch.ones(2, device=device)
         s = torch.Stream(device=device)
         compiled = torch.compile(fn, backend=backend, fullgraph=True)
-        self.assertEqual(compiled(x, s), fn(x, s))
+
+        def results():
+            actual, expected = compiled(x, s), fn(x, s)
+            # The results come from s; read them back after it finishes.
+            torch.accelerator.synchronize()
+            return actual, expected
+
+        self.assertEqual(*results())
         with torch.Stream(device=device) as other:
-            self.assertEqual(compiled(x, s), fn(x, s))
+            self.assertEqual(*results())
             self.assertEqual(compiled(x, s)[1], other.stream_id)
 
     def test_recorded_events_append_runtime_objects(self, device):
