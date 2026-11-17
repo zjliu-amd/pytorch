@@ -2,13 +2,13 @@ import io
 import json
 import logging
 import os
-import tempfile
 from typing import IO
 
 import torch
 from torch._inductor import config
 from torch._inductor.cpp_builder import BuildOptionsBase, CppBuilder
 from torch.export.pt2_archive._package import (
+    _buffer_to_temp_pt2,
     AOTI_FILES,
     AOTICompiledModel,
     load_pt2,
@@ -128,14 +128,12 @@ def load_package(
             log.warning("Loading outdated pt2 file. Please regenerate your package.")
 
     if isinstance(path, (io.IOBase, IO)):
-        with tempfile.NamedTemporaryFile(suffix=".pt2") as f:
-            # TODO(angelayi): We shouldn't need to do this -- miniz should
-            # handle reading the buffer. This is just a temporary workaround
-            path.seek(0)
-            f.write(path.read())
-            log.debug("Writing buffer to tmp file located at %s.", f.name)
+        # TODO(angelayi): We shouldn't need to do this -- miniz should
+        # handle reading the buffer. This is just a temporary workaround
+        with _buffer_to_temp_pt2(path) as f_name:
+            log.debug("Writing buffer to tmp file located at %s.", f_name)
             loader = torch._C._aoti.AOTIModelPackageLoader(
-                f.name,
+                f_name,
                 model_name,
                 run_single_threaded,
                 num_runners,

@@ -34,6 +34,7 @@ from torch.testing._internal.common_utils import (
     add_skip_condition,
     HardwareClassification,
     IS_FBCODE,
+    IS_WINDOWS,
 )
 from torch.testing._internal.inductor_utils import GPU_TYPE, HAS_GPU
 from torch.utils import _pytree as pytree
@@ -483,15 +484,26 @@ model(torch.ones(2))
                         shutil.rmtree(collision_dir)
 
                     # Verify robustness: move data deeper
-                    nested_dir = os.path.join(temp_dir, "nested_dir")
-                    os.makedirs(nested_dir)
-                    # Move all contents to nested_dir
-                    for item in os.listdir(temp_dir):
-                        if item != "nested_dir":
-                            shutil.move(os.path.join(temp_dir, item), nested_dir)
+                    if IS_WINDOWS:
+                        # Windows keeps the files loaded above (model library,
+                        # kernel binaries) locked, so they cannot be moved.
+                        # Build the same nested layout from a fresh extraction.
+                        load_root = os.path.join(temp_dir, "nested_root")
+                        nested_dir = os.path.join(load_root, "nested_dir")
+                        os.makedirs(nested_dir)
+                        with zipfile.ZipFile(package_path, "r") as zip_ref:
+                            zip_ref.extractall(nested_dir)
+                    else:
+                        load_root = temp_dir
+                        nested_dir = os.path.join(temp_dir, "nested_dir")
+                        os.makedirs(nested_dir)
+                        # Move all contents to nested_dir
+                        for item in os.listdir(temp_dir):
+                            if item != "nested_dir":
+                                shutil.move(os.path.join(temp_dir, item), nested_dir)
 
-                    # Load from root temp_dir again, it should find it in nested_dir
-                    loaded_nested = torch._inductor.aoti_load_package(temp_dir)
+                    # Load from the root again, it should find it in nested_dir
+                    loaded_nested = torch._inductor.aoti_load_package(load_root)
                     actual_nested = loaded_nested(*example_inputs)
                     self.assertEqual(actual_nested, expected)
 
@@ -506,7 +518,10 @@ model(torch.ones(2))
                     self.assertTrue(len(os.listdir(nested_dir)) > 0)
 
                 finally:
-                    shutil.rmtree(temp_dir)
+                    # On Windows the model library and kernel binaries loaded
+                    # from temp_dir stay mapped by this process, so they cannot
+                    # be deleted here.
+                    shutil.rmtree(temp_dir, ignore_errors=IS_WINDOWS)
 
     def test_linear(self):
         class Model(torch.nn.Module):

@@ -1,9 +1,11 @@
+import contextlib
 import glob
 import io
 import json
 import logging
 import os
 import pickle
+import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -61,6 +63,8 @@ from torch.types import FileLike
 
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from torch.utils._ordered_set import OrderedSet
 
 
@@ -1057,6 +1061,35 @@ def _load_extra_files(
     return extra_file_contents
 
 
+@contextlib.contextmanager
+def _buffer_to_temp_pt2(f: IO[bytes]) -> "Iterator[str]":
+    """Copy a PT2 buffer to a temporary file and yield its path.
+
+    The C++ AOTIModelPackageLoader only reads files. On Windows a
+    NamedTemporaryFile cannot be opened a second time by name while it is
+    open, so write to a closed temporary file there and delete it afterwards.
+    """
+    if sys.platform != "win32":
+        with tempfile.NamedTemporaryFile(suffix=".pt2") as tf:
+            f.seek(0)
+            tf.write(f.read())
+            tf.flush()
+            yield tf.name
+        return
+
+    fd, name = tempfile.mkstemp(suffix=".pt2")
+    try:
+        with os.fdopen(fd, "wb") as tf:
+            f.seek(0)
+            tf.write(f.read())
+        yield name
+    finally:
+        try:
+            os.remove(name)
+        except OSError:
+            logger.debug("Could not remove temporary file %s", name)
+
+
 def _load_aoti(
     file: str,
     model_name: str,
@@ -1200,15 +1233,13 @@ def load_pt2(
     if isinstance(f, (io.IOBase, IO)):
         if len(aoti_model_names) > 0:
             # Workaround for AOTIModelPackageLoader not reading buffers
-            with tempfile.NamedTemporaryFile(suffix=".pt2") as tf:
+            with _buffer_to_temp_pt2(f) as tf_name:
                 f.seek(0)
-                tf.write(f.read())
-                f.seek(0)
-                logger.debug("Writing buffer to tmp file located at %s.", tf.name)
+                logger.debug("Writing buffer to tmp file located at %s.", tf_name)
 
                 aoti_runners = {
                     model_name: _load_aoti(
-                        tf.name,
+                        tf_name,
                         model_name,
                         run_single_threaded,
                         num_runners,

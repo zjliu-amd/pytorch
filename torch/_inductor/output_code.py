@@ -1146,10 +1146,11 @@ class CompiledAOTI(OutputCode):
         if not config.aot_inductor.link_libtorch:
             return
 
-        if (
-            torch._inductor.cpp_builder._IS_MACOS
-            or torch._inductor.cpp_builder._IS_WINDOWS
-        ):
+        if torch._inductor.cpp_builder._IS_MACOS:
+            return
+
+        # Only ROCm builds load the compiled library here on Windows.
+        if torch._inductor.cpp_builder._IS_WINDOWS and torch.version.hip is None:
             return
 
         if config.aot_inductor.cross_target_platform == "windows":
@@ -1162,8 +1163,11 @@ class CompiledAOTI(OutputCode):
             return
 
         if isinstance(self.filename, list):
+            lib_ext = ".pyd" if torch._inductor.cpp_builder._IS_WINDOWS else ".so"
             current_callable = next(
-                fn for fn in self.filename if isinstance(fn, str) and fn.endswith(".so")
+                fn
+                for fn in self.filename
+                if isinstance(fn, str) and fn.endswith(lib_ext)
             )
         else:
             current_callable = self.filename

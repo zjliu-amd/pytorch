@@ -280,7 +280,8 @@ def get_triton_grid_info(kernel, total_elements, src_code):
         )
         for cfg in kernel.configs
     ]
-    grid_match = re.search(r"uint32_t grid_0 = (\d+)L;", src_code)
+    # LL on Windows and macOS (printers.py)
+    grid_match = re.search(r"uint32_t grid_0 = (\d+)LL?;", src_code)
     if grid_match:
         return int(grid_match.group(1)), expected_grids
     else:
@@ -9014,7 +9015,10 @@ class AOTInductorTestsTemplate:
         expected_scalar_args = [
             "triton_poi_fused_zeros_like_0_xnumel",
             "triton_poi_fused_ones_1_xnumel",
-            "std::max(static_cast<int64_t>(512L), static_cast<int64_t>(u0))",
+            # int64_t literals take LL on Windows (cpp_wrapper_cpu.py).
+            "std::max(static_cast<int64_t>(512L"
+            + ("L" if sys.platform in ["darwin", "win32"] else "")
+            + "), static_cast<int64_t>(u0))",
         ]
 
         with config.patch({"aot_inductor.debug_intermediate_value_printer": "2"}):
@@ -12421,6 +12425,12 @@ compiled.run_with_lazy_cuda_graphs(x)
         self.assertTrue(allocated_memory[1] == allocated_memory[2])
 
     @unittest.skipIf(IS_MACOS, "might have no readelf on Mac")
+    @unittest.skipIf(
+        IS_WINDOWS,
+        "A Windows DLL must resolve every aoti_torch_* import at link time; "
+        "without link_libtorch that needs aot_inductor.aoti_shim_library, "
+        "which is not shipped (Linux leaves them to the loaded libtorch)",
+    )
     def test_libtorch_free_so(self):
         class Model(torch.nn.Module):
             def __init__(self) -> None:
@@ -12698,7 +12708,7 @@ compiled.run_with_lazy_cuda_graphs(x)
             script = f"""
 import torch
 
-torch._inductor.aoti_load_package("{model_path}")
+torch._inductor.aoti_load_package({str(model_path)!r})
 """
             result = subprocess.run(
                 [sys.executable, "-c", script], capture_output=True, text=True
@@ -12743,7 +12753,7 @@ torch._inductor.aoti_load_package("{model_path}")
             script = f"""
 import torch
 
-torch._inductor.aoti_load_package("{model_path}")
+torch._inductor.aoti_load_package({str(model_path)!r})
 """
             result = subprocess.run(
                 [sys.executable, "-c", script], capture_output=True, text=True

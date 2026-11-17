@@ -1296,10 +1296,19 @@ void aoti_torch_save_tensor_handle(
   }
   // Join as a path component: plain concatenation had no separator, so files
   // landed beside the created directory rather than inside it.
+  std::string device_str = t->device().str();
+#ifdef _WIN32
+  // ':' (as in "cuda:0") selects an NTFS alternate data stream.
+  for (auto& c : device_str) {
+    if (c == ':') {
+      c = '_';
+    }
+  }
+#endif
   std::string tensor_filepath_to_save =
       (tmp_folder /
        (std::string(launch_prefix) + "_" + kernel_name + "_" + tensor_name +
-        "_" + t->device().str() + ".pt"))
+        "_" + device_str + ".pt"))
           .string();
 
   auto bytes = torch::jit::pickle_save(c10::IValue(*t));

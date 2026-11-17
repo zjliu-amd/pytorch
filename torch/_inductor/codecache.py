@@ -510,6 +510,58 @@ class PersistentCache(CacheBase):
         return timings
 
 
+# Little-endian bytes of the placeholder (0x1234567899abcdef) written in place
+# of large constants and patched over after compilation.
+_CONSTS_MAGIC_LE = b"\xef\xcd\xab\x99\x78\x56\x34\x12"
+
+
+def _convert_cubins_to_obj_windows(
+    cubins: list[tuple[str, str]],
+    output_dir: str,
+    device_type: str,
+    aot_mode: bool,
+    use_relative_path: bool,
+) -> str:
+    """Embed kernel binaries into one object file on Windows.
+
+    Windows has no ``ld -r -b binary``/``objcopy``, so emit a C++ source that
+    defines ``__<kernel_name>_start`` for each kernel binary (the symbols the
+    AOTI wrapper declares as ``extern "C"``) and compile it with the C++
+    compiler used for the rest of the model.
+    """
+    lines = ['extern "C" {']
+    for cubin_file, kernel_name in cubins:
+        with open(cubin_file, "rb") as f:
+            data = f.read()
+        if not data:
+            raise RuntimeError(f"Kernel binary {cubin_file} is empty")
+        lines.append(
+            f"alignas(16) extern const unsigned char __{kernel_name}_start[{len(data)}] = {{"
+        )
+        for i in range(0, len(data), 64):
+            lines.append(",".join(map(str, data[i : i + 64])) + ",")
+        lines.append("};")
+    lines.append("}")
+    src_path = os.path.join(output_dir, "cubins_combined.cpp")
+    with open(src_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+    builder = CppBuilder(
+        name="cubins_combined",
+        sources=src_path,
+        output_dir=output_dir,
+        BuildOption=CppTorchDeviceOptions(
+            device_type=device_type,
+            aot_mode=aot_mode,
+            compile_only=True,
+            use_relative_path=use_relative_path,
+        ),
+    )
+    builder.build()
+    os.remove(src_path)
+    return builder.get_target_file_path()
+
+
 def get_lock_dir() -> str:
     lock_dir = os.path.join(cache_dir(), "locks")
     if not os.path.exists(lock_dir):
@@ -3011,7 +3063,9 @@ class AotCodeCompiler:
 
             # Use c++ to convert consts to object file can support more compilers, such as msvc and icx.
             def format_consts_to_cpp(
-                consts: bytes | bytearray, align_bytes: int
+                consts: bytes | bytearray,
+                align_bytes: int,
+                use_placeholder: bool = False,
             ) -> tuple[str, str]:
                 consts_size = len(consts)
                 asan_attr = """#if defined(__clang__) || defined (__GNUC__)\t\n\
@@ -3026,12 +3080,21 @@ ATTRIBUTE_NO_SANITIZE_ADDRESS\t\n"""
                 const_cpp += (
                     f"unsigned char _binary_constants_bin_start[{consts_size}] = {{\t\n"
                 )
-                count_bytes = 0
-                for c in consts:
-                    const_cpp += f"{c}, "
-                    count_bytes = count_bytes + 1
-                    if count_bytes % 16 == 0:
-                        const_cpp += "\t\n"
+                if use_placeholder:
+                    # Emit only the 8-byte magic number; the rest of the array
+                    # is zero-filled by the compiler. The real bytes are written
+                    # over the placeholder in the object file after compilation
+                    # (see below), which avoids formatting and compiling a huge
+                    # C++ initializer list for large constants.
+                    const_cpp += ", ".join(str(c) for c in _CONSTS_MAGIC_LE)
+                    const_cpp += "\t\n"
+                else:
+                    count_bytes = 0
+                    for c in consts:
+                        const_cpp += f"{c}, "
+                        count_bytes = count_bytes + 1
+                        if count_bytes % 16 == 0:
+                            const_cpp += "\t\n"
                 const_cpp += "};\t\n"
                 const_cpp += f"alignas({align_bytes}) extern unsigned char * _binary_constants_bin_end;\t\n"
                 return const_cpp, "weights.cpp"
@@ -3082,6 +3145,17 @@ end
                     asm_ext = "S"
                 return asm_code, asm_ext
 
+            # On Windows the C++ path is the only one, and formatting large
+            # constants byte by byte as C++ text is too slow (and too large to
+            # compile). Use a placeholder and patch the object file instead, as
+            # the ASM path does on Linux.
+            use_cpp_placeholder = (
+                platform == "win32"
+                and not use_asm_build
+                and is_large_consts
+                and sys.byteorder == "little"
+            )
+
             if use_asm_build:
                 consts_code, code_ext = format_consts_to_gnu_asm(
                     consts, ALIGN_BYTES, symbol_prefix, is_large_consts
@@ -3092,7 +3166,9 @@ end
                         ALIGN_BYTES, symbol_prefix
                     )
                 else:
-                    consts_code, code_ext = format_consts_to_cpp(consts, ALIGN_BYTES)
+                    consts_code, code_ext = format_consts_to_cpp(
+                        consts, ALIGN_BYTES, use_cpp_placeholder
+                    )
 
             _, consts_s = write(
                 consts_code,
@@ -3138,6 +3214,23 @@ end
                     while pos < len(consts):
                         rc = f.write(consts[pos:])
                         pos += rc
+            elif use_cpp_placeholder:
+                import mmap
+
+                with open(consts_o, "r+b") as f:
+                    # The data section of a COFF object is not necessarily
+                    # within the first 1024 bytes, so search the whole file.
+                    with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                        start_idx = mm.find(_CONSTS_MAGIC_LE)
+                        if (
+                            start_idx == -1
+                            or mm.find(_CONSTS_MAGIC_LE, start_idx + 1) != -1
+                        ):
+                            raise AssertionError(
+                                "Magic number not found exactly once in constants object"
+                            )
+                    f.seek(start_idx)
+                    f.write(consts)
 
             # Remove the .S file to save space
             os.remove(consts_s)
@@ -3526,9 +3619,13 @@ end
             cubins_o = []
             asm_files = []
             fatbin_cmds: list[tuple[str, str, str | None, str | None]] = []
-            if not _IS_WINDOWS:
+            # On Windows only ROCm supports multi-arch bundles and embedded
+            # kernel binaries; there is no ld/objcopy, so embedding goes
+            # through a generated C++ source instead (see below).
+            if not _IS_WINDOWS or torch.version.hip is not None:
                 cubins_to_embed: list[tuple[str, str]] = []
-                ld, objcopy = get_ld_and_objcopy(use_relative_path)
+                if not _IS_WINDOWS:
+                    ld, objcopy = get_ld_and_objcopy(use_relative_path)
                 kernels = getattr(V.graph.wrapper_code, "_kernel_name_to_body", {})
                 for kernel_name, value in CudaKernelParamCache.cache.items():
                     if kernel_name not in kernels:
@@ -3540,9 +3637,13 @@ end
                         asm_files.append(asm_file)
 
                     cubin_file = value[get_cpp_wrapper_cubin_path_name()]
+                    # rocm_multiarch_utils does not support Windows yet (no
+                    # /dev/null, Linux tool paths), so on Windows the option
+                    # stays ignored, as before.
                     if (
                         config.aot_inductor.emit_multi_arch_kernel
                         and device_type == "cuda"
+                        and not _IS_WINDOWS
                     ):
                         if torch.version.hip is None:
                             fatbin_cmds.append(
@@ -3623,7 +3724,17 @@ end
                     ):
                         list(pool.map(_compile_fatbin, fatbin_cmds))
 
-                if cubins_to_embed:
+                if cubins_to_embed and _IS_WINDOWS:
+                    cubins_o.append(
+                        _convert_cubins_to_obj_windows(
+                            cubins_to_embed,
+                            os.path.dirname(output_so),
+                            device_type,
+                            graph.aot_mode,
+                            use_relative_path,
+                        )
+                    )
+                elif cubins_to_embed:
                     # Batch all cubins into a single .o using .incbin assembly.
                     # This replaces N * 3 subprocess calls (ld + 2x objcopy per
                     # cubin) with a single compiler invocation.
