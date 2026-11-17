@@ -1,4 +1,9 @@
 # Owner(s): ["module: inductor"]
+import importlib.abc
+import importlib.util
+import sys
+from unittest import mock
+
 import torch
 from torch._inductor.test_case import run_tests, TestCase
 from torch.testing._internal.common_utils import instantiate_parametrized_tests
@@ -8,11 +13,47 @@ from torch.testing._internal.inductor_utils import (
     requires_helion,
     requires_triton,
 )
+from torch.utils._helion import has_helion, has_helion_package
 
 
 if HAS_HELION:
     import helion
     import helion.language as hl
+
+
+class _BrokenHelionLoader(importlib.abc.Loader):
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        raise ValueError("simulated broken helion install")
+
+
+class _BrokenHelionFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "helion":
+            return importlib.util.spec_from_loader(fullname, _BrokenHelionLoader())
+        return None
+
+
+class HelionProbeTests(TestCase):
+    def test_has_helion_broken_install(self):
+        # An installed helion that raises a non-ImportError at import time must
+        # be reported as unavailable (with a warning), not crash the caller.
+        def clear_caches():
+            has_helion_package.cache_clear()
+            has_helion.cache_clear()
+
+        clear_caches()
+        self.addCleanup(clear_caches)
+        meta_path = [_BrokenHelionFinder(), *sys.meta_path]
+        with (
+            mock.patch.dict(sys.modules),
+            mock.patch.object(sys, "meta_path", meta_path),
+        ):
+            sys.modules.pop("helion", None)
+            with self.assertWarnsRegex(UserWarning, "simulated broken helion install"):
+                self.assertFalse(has_helion())
 
 
 class HelionTests(TestCase):
