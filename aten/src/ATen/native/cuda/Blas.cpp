@@ -133,6 +133,7 @@ bool should_round_gfx942_tf32_inputs_to_nearest(
       is_gfx942_device(input.get_device());
 }
 
+#if defined(_WIN32)
 bool is_gfx1151_device(const DeviceIndex device_index) {
   TORCH_INTERNAL_ASSERT(
       device_index >= 0 && device_index < C10_COMPILE_TIME_MAX_GPUS);
@@ -147,15 +148,21 @@ bool is_gfx1151_device(const DeviceIndex device_index) {
   return results[device_index];
 }
 
-// On gfx1151, rocBLAS's strided-batched bf16 x bf16 -> fp32 GEMM loses
+// Windows ROCm only. With the Windows ROCm SDK's rocBLAS on gfx1151 (ROCm SDK
+// 10.3.0a20261111), the strided-batched bf16 x bf16 -> fp32 GEMM loses
 // precision when the result has a single row or column (batched
 // matrix-vector products): the fp32 result is only as accurate as bf16 (e.g.
-// errors up to 0.05 on values around 20 for 16 x 32 x 1 with K = 32, ROCm 10.3),
-// while the same products of the inputs converted to fp32, or one GEMM per
-// batch, are accurate. hipBLASLt does not support these shapes
+// errors up to 0.05 on values around 20 for 16 x 32 x 1 with K = 32), while
+// the same products of the inputs converted to fp32, or one GEMM per batch,
+// are accurate. hipBLASLt does not support these shapes
 // (HIPBLAS_STATUS_NOT_SUPPORTED) and falls back to rocBLAS, so both BLAS
 // backends hit it. bf16 converts to fp32 exactly, so computing in fp32 gives
 // the result asked for.
+// It is not applied on Linux: there this accuracy regression is treated as
+// fixed from ROCm 7.2.1 (see test_mm_bmm_dtype_overload), and it has only
+// been observed with the Windows SDK. That SDK reports ROCm 10.3, above the
+// fixed version, so a ROCm version check cannot select it. Remove this once
+// the Windows rocBLAS is fixed.
 bool should_compute_bf16_bmm_in_fp32(
     const Tensor& result,
     const Tensor& batch1) {
@@ -164,6 +171,17 @@ bool should_compute_bf16_bmm_in_fp32(
       (result.size(1) == 1 || result.size(2) == 1) &&
       is_gfx1151_device(result.get_device());
 }
+
+// fp32 copy of a batch operand. A broadcast batch (batch stride 0, e.g. from
+// expand()) is converted once and expanded again, so the copy is not
+// materialized batch-size times.
+Tensor batch_to_fp32(const Tensor& batch) {
+  if (batch.size(0) > 1 && batch.stride(0) == 0) {
+    return batch.narrow(0, 0, 1).to(ScalarType::Float).expand(batch.sizes());
+  }
+  return batch.to(ScalarType::Float);
+}
+#endif // defined(_WIN32)
 #endif
 
 std::pair<Tensor, Tensor> round_gfx942_tf32_operands_to_nearest_if_needed(
@@ -807,13 +825,13 @@ const Tensor& baddbmm_out_cuda_impl(const Tensor& result, const Tensor& self, co
       return result.mul_(beta);
     }
   }
-#ifdef USE_ROCM
+#if defined(USE_ROCM) && defined(_WIN32)
   if (should_compute_bf16_bmm_in_fp32(result, batch1)) {
     return baddbmm_out_cuda_impl(
         result,
         self,
-        batch1.to(ScalarType::Float),
-        batch2.to(ScalarType::Float),
+        batch_to_fp32(batch1),
+        batch_to_fp32(batch2),
         beta,
         alpha);
   }
