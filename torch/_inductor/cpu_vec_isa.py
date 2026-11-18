@@ -671,13 +671,14 @@ def pick_vec_isa() -> VecISA:
     if config.is_fbcode() and (platform.machine() in ["x86_64", "AMD64"]):
         return VecAVX2()
 
-    if _IS_WINDOWS and torch.version.hip is not None and "CXX" not in os.environ:
-        from torch._inductor.cpp_builder import _get_windows_rocm_cpu_compiler
+    if _IS_WINDOWS and torch.version.hip is not None:
+        from torch._inductor.cpp_builder import _windows_rocm_cpu_code_can_vectorize
 
-        # cl fallback in a Windows ROCm build: vectorized kernels would call the
-        # clang-cl-built Sleef with misaligned vector arguments (see
-        # _get_windows_rocm_cpu_compiler), so generate scalar code.
-        if _get_windows_rocm_cpu_compiler() == "cl":
+        # A Windows ROCm build whose CPU compiler is cl (the fallback, or CXX=cl):
+        # vectorized kernels would call the clang-cl-built Sleef with misaligned
+        # vector arguments (see _get_windows_rocm_cpu_compiler), so generate
+        # scalar code.
+        if not _windows_rocm_cpu_code_can_vectorize():
             return invalid_vec_isa
 
     _valid_vec_isa_list: list[VecISA] = valid_vec_isa_list()

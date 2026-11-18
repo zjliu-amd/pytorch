@@ -449,13 +449,14 @@ def _normalize_device_type(device_type: str) -> str:
 
 
 @functools.cache
-def _warn_windows_rocm_cpu_compiler_fallback() -> None:
+def _warn_windows_rocm_cpu_compiler_fallback(reason: str) -> None:
     log.warning(
-        "ROCm clang-cl not found; compiling Inductor CPU code with cl and "
-        "without AVX2/AVX512 vectorization. cl passes vector arguments in "
+        "%s; compiling Inductor CPU code with cl (OpenMP: vcomp) and without "
+        "AVX2/AVX512 vectorization. cl passes vector arguments in "
         "16-byte-aligned temporaries, and the clang-cl-built Sleef in this "
         "Windows ROCm build reads them with aligned loads, so vectorized "
-        "kernels would crash (0xC0000005)."
+        "kernels would crash (0xC0000005).",
+        reason,
     )
 
 
@@ -468,14 +469,36 @@ def _get_windows_rocm_cpu_compiler() -> str:
     temporaries it aligns to 16 bytes only, while the clang-built Sleef
     functions read them with aligned 32/64-byte moves, so cl-built AVX2/AVX512
     kernels crash with 0xC0000005 in Sleef (e.g. Sleef_powf16_u10). Use the
-    ROCm clang-cl, as for GPU code; fall back to cl (unvectorized, see
-    cpu_vec_isa.pick_vec_isa) if it cannot be found.
+    ROCm clang-cl, as for GPU code. Fall back to cl (unvectorized, see
+    cpu_vec_isa.pick_vec_isa) if clang-cl cannot be found, or if torch runs on
+    Intel OpenMP but its import library is missing: clang-cl /openmp code
+    would then have to link clang's libomp, a second OpenMP runtime next to
+    torch's (see _torch_intel_openmp_win).
     """
     clang_cl = _get_rocm_clang_cl_windows()
-    if os.path.isfile(clang_cl) or shutil.which(clang_cl):
-        return clang_cl
-    _warn_windows_rocm_cpu_compiler_fallback()
-    return "cl"
+    if not (os.path.isfile(clang_cl) or shutil.which(clang_cl)):
+        _warn_windows_rocm_cpu_compiler_fallback("ROCm clang-cl not found")
+        return "cl"
+    uses_intel_openmp, iomp_lib_dir = _torch_intel_openmp_win()
+    if uses_intel_openmp and iomp_lib_dir is None:
+        _warn_windows_rocm_cpu_compiler_fallback(
+            "torch uses Intel OpenMP (libiomp5md.dll in torch/lib), but its "
+            "import library libiomp5md.lib was not found in torch/lib or "
+            "<prefix>\\Library\\lib (pip install intel-openmp provides it)"
+        )
+        return "cl"
+    return clang_cl
+
+
+def _windows_rocm_cpu_code_can_vectorize() -> bool:
+    """
+    Whether Inductor may generate AVX2/AVX512 CPU kernels in a Windows ROCm
+    build: only if the CPU compiler actually used (CXX or the default) is
+    clang-cl or Intel's icx-cl, which pass vector arguments the way the
+    clang-cl-built Sleef expects. See _get_windows_rocm_cpu_compiler.
+    """
+    compiler = get_cpp_compiler("cpu")
+    return _is_clang(compiler) or _is_intel_compiler(compiler)
 
 
 def get_cpp_compiler(device_type: str | None = None) -> str:
@@ -1680,33 +1703,30 @@ def perload_icx_libomp_win(cpp_compiler: str) -> None:
 
 
 @functools.cache
-def _torch_intel_openmp_lib_dir_win() -> str | None:
-    """Directory of libiomp5md.lib when this Windows ROCm torch uses Intel OpenMP.
+def _torch_intel_openmp_win() -> tuple[bool, str | None]:
+    """Whether this Windows ROCm torch uses Intel OpenMP, and where its import
+    library libiomp5md.lib is (None if not found).
 
-    Returns None when torch does not ship libiomp5md.dll (then the generated
-    code uses clang's libomp). Raises when torch uses libiomp5md.dll but no
-    import library is found: linking clang's libomp instead would load a second
-    OpenMP runtime and abort with "OMP: Error #15" in the first parallel kernel.
+    Returns (False, None) off Windows ROCm and when torch does not ship
+    libiomp5md.dll (then clang-cl code uses clang's libomp). When torch uses
+    libiomp5md.dll, clang-cl code must link it too: linking clang's libomp
+    would load a second OpenMP runtime and abort with "OMP: Error #15" in the
+    first parallel kernel.
     """
     if not _IS_WINDOWS or torch.version.hip is None:
-        return None
+        return False, None
     from torch.utils.cpp_extension import TORCH_LIB_PATH
 
     if not os.path.isfile(os.path.join(TORCH_LIB_PATH, "libiomp5md.dll")):
-        return None
+        return False, None
     for lib_dir in (
         TORCH_LIB_PATH,
         os.path.join(sys.prefix, "Library", "lib"),
         os.path.join(sys.base_prefix, "Library", "lib"),
     ):
         if os.path.isfile(os.path.join(lib_dir, "libiomp5md.lib")):
-            return lib_dir
-    raise RuntimeError(
-        "torch uses Intel OpenMP (libiomp5md.dll in torch/lib), but its import "
-        "library libiomp5md.lib was not found in torch/lib or "
-        "<prefix>\\Library\\lib. Install it (pip install intel-openmp) so "
-        "Inductor C++ code links the same OpenMP runtime as torch."
-    )
+            return True, lib_dir
+    return True, None
 
 
 def _get_openmp_args(
@@ -1784,8 +1804,18 @@ def _get_openmp_args(
         """
         if _is_clang(cpp_compiler):
             cflags.append("openmp")
-            iomp_lib_dir = _torch_intel_openmp_lib_dir_win()
-            if iomp_lib_dir is not None:
+            uses_intel_openmp, iomp_lib_dir = _torch_intel_openmp_win()
+            if uses_intel_openmp:
+                if iomp_lib_dir is None:
+                    # Only reachable with CXX set to clang-cl: the default CPU
+                    # compiler falls back to cl in this case.
+                    raise RuntimeError(
+                        "torch uses Intel OpenMP (libiomp5md.dll in torch/lib), "
+                        "but its import library libiomp5md.lib was not found in "
+                        "torch/lib or <prefix>\\Library\\lib. Install it (pip "
+                        "install intel-openmp) so Inductor C++ code links the "
+                        "same OpenMP runtime as torch, or unset CXX."
+                    )
                 # torch itself runs on Intel OpenMP (libiomp5md.dll, MKL
                 # builds). Linking the generated code against clang's
                 # libomp loads a second OpenMP runtime into the process, which

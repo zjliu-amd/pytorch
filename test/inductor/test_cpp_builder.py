@@ -12,7 +12,7 @@ from torch._dynamo.device_interface import (
     DeviceInterface,
     register_interface_for_device,
 )
-from torch._inductor import cpp_builder
+from torch._inductor import cpp_builder, cpu_vec_isa
 from torch._inductor.cpp_builder import get_cpp_torch_device_options
 from torch._inductor.test_case import run_tests, TestCase
 from torch.testing._internal.common_utils import (
@@ -147,6 +147,9 @@ class TestGetCppCompilerWindows(TestCase):
                 cpp_builder.os.path, "isfile", return_value=clang_cl_found
             ),
             mock.patch.object(cpp_builder.shutil, "which", return_value=None),
+            mock.patch.object(
+                cpp_builder, "_torch_intel_openmp_win", return_value=(False, None)
+            ),
             mock.patch.dict(os.environ, env, clear=True),
         ):
             cpp_builder._warn_windows_rocm_cpu_compiler_fallback.cache_clear()
@@ -159,6 +162,45 @@ class TestGetCppCompilerWindows(TestCase):
         else:
             rocm_compiler.assert_not_called()
 
+    @parametrize(
+        "iomp_lib_dir,expected",
+        [
+            subtest(("C:/venv/Library/lib", THEROCK_CLANG_CL), name="import_lib_found"),
+            # clang-cl /openmp code would have to link clang's libomp, a second
+            # OpenMP runtime next to torch's libiomp5md: use cl (vcomp) instead.
+            subtest((None, "cl"), name="import_lib_missing"),
+        ],
+    )
+    def test_rocm_cpu_compiler_with_intel_openmp(self, iomp_lib_dir, expected):
+        with (
+            mock.patch.object(cpp_builder, "_IS_WINDOWS", True),
+            mock.patch.object(cpp_builder.os, "sep", "\\"),
+            mock.patch.object(torch.version, "hip", "7.14.0"),
+            mock.patch.object(cpp_builder, "check_compiler_exist_windows"),
+            mock.patch.object(cpp_builder, "check_msvc_cl_language_id"),
+            mock.patch.object(
+                cpp_builder,
+                "_get_rocm_clang_cl_windows",
+                return_value=THEROCK_CLANG_CL_WINDOWS,
+            ),
+            mock.patch.object(cpp_builder.os.path, "isfile", return_value=True),
+            mock.patch.object(
+                cpp_builder,
+                "_torch_intel_openmp_win",
+                return_value=(True, iomp_lib_dir),
+            ),
+            mock.patch.dict(os.environ, {}, clear=True),
+            self.assertLogs(cpp_builder.log, level="WARNING") as logs,
+        ):
+            cpp_builder._warn_windows_rocm_cpu_compiler_fallback.cache_clear()
+            compiler = cpp_builder.get_cpp_compiler(device_type="cpu")
+            # assertLogs needs at least one record.
+            cpp_builder.log.warning("end of test")
+
+        self.assertEqual(compiler, expected)
+        warned = any("libiomp5md.lib was not found" in line for line in logs.output)
+        self.assertEqual(warned, iomp_lib_dir is None)
+
     def test_rejects_invalid_device(self):
         with (
             mock.patch.object(cpp_builder, "_IS_WINDOWS", True),
@@ -167,6 +209,61 @@ class TestGetCppCompilerWindows(TestCase):
             self.assertRaises(RuntimeError),
         ):
             cpp_builder.get_cpp_compiler(device_type="cuda:invalid")
+
+
+@instantiate_parametrized_tests
+class TestPickVecIsaWindowsRocm(TestCase):
+    # cl-built vector kernels crash in the clang-cl-built Sleef of a Windows ROCm
+    # build, so Inductor generates scalar CPU code unless the CPU compiler that is
+    # actually used, including one chosen with CXX, is clang-cl.
+    def setUp(self):
+        super().setUp()
+        cpp_builder._is_clang.cache_clear()
+
+    def tearDown(self):
+        cpp_builder._is_clang.cache_clear()
+        super().tearDown()
+
+    @parametrize(
+        "cxx,clang_cl_found,vectorized",
+        [
+            subtest((None, True, True), name="default_clang_cl"),
+            subtest((None, False, False), name="default_cl_fallback"),
+            subtest(("cl", True, False), name="cxx_cl"),
+            subtest(("my-clang-cl", True, True), name="cxx_clang_cl"),
+        ],
+    )
+    def test_vectorizes_only_with_clang_cl(self, cxx, clang_cl_found, vectorized):
+        env = {} if cxx is None else {"CXX": cxx}
+        avx2 = cpu_vec_isa.VecAVX2()
+        with (
+            mock.patch.object(cpu_vec_isa, "_IS_WINDOWS", True),
+            mock.patch.object(cpp_builder, "_IS_WINDOWS", True),
+            mock.patch.object(cpp_builder.os, "sep", "\\"),
+            mock.patch.object(torch.version, "hip", "7.14.0"),
+            mock.patch.object(cpp_builder, "check_compiler_exist_windows"),
+            mock.patch.object(cpp_builder, "check_msvc_cl_language_id"),
+            mock.patch.object(
+                cpp_builder,
+                "_get_rocm_clang_cl_windows",
+                return_value=THEROCK_CLANG_CL_WINDOWS,
+            ),
+            mock.patch.object(
+                cpp_builder.os.path, "isfile", return_value=clang_cl_found
+            ),
+            mock.patch.object(cpp_builder.shutil, "which", return_value=None),
+            mock.patch.object(
+                cpp_builder, "_torch_intel_openmp_win", return_value=(False, None)
+            ),
+            mock.patch.object(cpp_builder, "_is_intel_compiler", return_value=False),
+            mock.patch.object(cpu_vec_isa, "valid_vec_isa_list", return_value=[avx2]),
+            cpu_vec_isa.config.patch({"cpp.simdlen": None}),
+            mock.patch.dict(os.environ, env, clear=True),
+        ):
+            cpp_builder._warn_windows_rocm_cpu_compiler_fallback.cache_clear()
+            isa = cpu_vec_isa.pick_vec_isa()
+
+        self.assertIs(isa, avx2 if vectorized else cpu_vec_isa.invalid_vec_isa)
 
 
 class TestMsvcLanguageCheck(TestCase):
