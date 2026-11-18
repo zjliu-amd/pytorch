@@ -190,6 +190,9 @@ def has_device_side_assert(output):
 # the engine is reset, the process sees no error, and later copies can return
 # stale data. Tearing such a context down can also hang the whole machine.
 # Tests that need a device-side assert to fire cannot run there.
+# This is keyed on the platform rather than probed: probing means firing a
+# device-side assert, which can hard-reset the machine. Remove it once the
+# Windows kernel-mode driver installs a GPU trap handler.
 DEVICE_ASSERTS_UNSUPPORTED = IS_WINDOWS and torch.version.hip is not None
 DEVICE_ASSERTS_UNSUPPORTED_REASON = (
     "device-side asserts do not raise on Windows ROCm: the driver installs no "

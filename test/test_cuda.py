@@ -3343,7 +3343,6 @@ raise RuntimeError("device assert did not fire")
             self.assertEqual(stash[0], torch.full_like(a, 6))
             self.assertEqual(stash[1], torch.full_like(a, 6))
 
-    @unittest.skipIf(DEVICE_ASSERTS_UNSUPPORTED, DEVICE_ASSERTS_UNSUPPORTED_REASON)
     def test_fixed_cuda_assert_async(self):
         with self.assertRaisesRegex(
             RuntimeError, "Boolean value of Tensor with no values is ambiguous"
@@ -3367,6 +3366,10 @@ raise RuntimeError("device assert did not fire")
             "torch._assert_async(torch.tensor(False, device='cuda'))",
             "torch._assert_async(torch.tensor(0 + 0j, device='cuda'))",
         ]
+        if DEVICE_ASSERTS_UNSUPPORTED:
+            # The statements below fire a device-side assert, even though in a
+            # subprocess; the host-side checks above have run.
+            self.skipTest(DEVICE_ASSERTS_UNSUPPORTED_REASON)
 
         import subprocess
 
