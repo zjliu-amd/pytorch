@@ -1856,12 +1856,16 @@ class DecompOneOffTests(TestCase):
             forward_pass_fn
         )
 
-        # check RMSNorm was fused with sinh
-        self.assertTrue("triton_per_fused__fused_rms_norm_sinh" in generated_codes[0])
-        self.assertTrue(
-            "triton_per_fused__fused_rms_norm__fused_rms_norm_backward_cosh_mul"
-            in generated_codes[1]
+        # check RMSNorm was fused with sinh. On Windows a long fused name is
+        # capped and ends in a hash of the full name.
+        from torch._inductor.utils import cap_fused_kernel_name
+
+        fw_name = cap_fused_kernel_name("fused__fused_rms_norm_sinh")
+        bw_name = cap_fused_kernel_name(
+            "fused__fused_rms_norm__fused_rms_norm_backward_cosh_mul"
         )
+        self.assertTrue(f"triton_per_{fw_name}" in generated_codes[0])
+        self.assertTrue(f"triton_per_{bw_name}" in generated_codes[1])
 
     @onlyAccelerator
     @skipIfCrossRef

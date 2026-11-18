@@ -1393,7 +1393,10 @@ def get_fused_kernel_name(
         ]
     else:
         raise NotImplementedError
-    name = "_".join(["fused"] + sources)
+    return cap_fused_kernel_name("_".join(["fused"] + sources))
+
+
+def cap_fused_kernel_name(name: str) -> str:
     # On Windows the default MAX_PATH (260) limit means a long descriptive
     # kernel name can push the Triton cache path past the limit, making the
     # generated .ttir unopenable. Cap the name and append a hash to keep it
