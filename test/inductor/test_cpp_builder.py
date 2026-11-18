@@ -172,6 +172,8 @@ class TestGetCppCompilerWindows(TestCase):
         ],
     )
     def test_rocm_cpu_compiler_with_intel_openmp(self, iomp_lib_dir, expected):
+        env = dict(os.environ)
+        env.pop("CXX", None)
         with (
             mock.patch.object(cpp_builder, "_IS_WINDOWS", True),
             mock.patch.object(cpp_builder.os, "sep", "\\"),
@@ -189,7 +191,7 @@ class TestGetCppCompilerWindows(TestCase):
                 "_torch_intel_openmp_win",
                 return_value=(True, iomp_lib_dir),
             ),
-            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.dict(os.environ, env, clear=True),
             self.assertLogs(cpp_builder.log, level="WARNING") as logs,
         ):
             cpp_builder._warn_windows_rocm_cpu_compiler_fallback.cache_clear()
@@ -209,6 +211,22 @@ class TestGetCppCompilerWindows(TestCase):
             self.assertRaises(RuntimeError),
         ):
             cpp_builder.get_cpp_compiler(device_type="cuda:invalid")
+
+
+class TestWindowsRocmOpenmpArgs(TestCase):
+    def test_clang_cl_without_iomp_import_lib_raises(self):
+        # clang-cl chosen explicitly while torch runs on Intel OpenMP without its
+        # import library: linking clang's libomp would load a second runtime.
+        with (
+            mock.patch.object(cpp_builder, "_IS_WINDOWS", True),
+            mock.patch.object(cpp_builder, "_IS_MACOS", False),
+            mock.patch.object(cpp_builder, "_is_clang", return_value=True),
+            mock.patch.object(
+                cpp_builder, "_torch_intel_openmp_win", return_value=(True, None)
+            ),
+            self.assertRaisesRegex(RuntimeError, "libiomp5md.lib"),
+        ):
+            cpp_builder._get_openmp_args("clang-cl")
 
 
 @instantiate_parametrized_tests
@@ -234,7 +252,10 @@ class TestPickVecIsaWindowsRocm(TestCase):
         ],
     )
     def test_vectorizes_only_with_clang_cl(self, cxx, clang_cl_found, vectorized):
-        env = {} if cxx is None else {"CXX": cxx}
+        env = dict(os.environ)
+        env.pop("CXX", None)
+        if cxx is not None:
+            env["CXX"] = cxx
         avx2 = cpu_vec_isa.VecAVX2()
         with (
             mock.patch.object(cpu_vec_isa, "_IS_WINDOWS", True),

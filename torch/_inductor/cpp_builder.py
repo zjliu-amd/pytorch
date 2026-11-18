@@ -497,7 +497,9 @@ def _windows_rocm_cpu_code_can_vectorize() -> bool:
     clang-cl or Intel's icx-cl, which pass vector arguments the way the
     clang-cl-built Sleef expects. See _get_windows_rocm_cpu_compiler.
     """
-    compiler = get_cpp_compiler("cpu")
+    # Resolve the compiler as get_cpp_compiler("cpu") does, without its
+    # existence checks: this is also asked when nothing is compiled.
+    compiler = os.environ.get("CXX") or _get_windows_rocm_cpu_compiler()
     return _is_clang(compiler) or _is_intel_compiler(compiler)
 
 
@@ -1807,8 +1809,9 @@ def _get_openmp_args(
             uses_intel_openmp, iomp_lib_dir = _torch_intel_openmp_win()
             if uses_intel_openmp:
                 if iomp_lib_dir is None:
-                    # Only reachable with CXX set to clang-cl: the default CPU
-                    # compiler falls back to cl in this case.
+                    # The default CPU compiler falls back to cl in this case, so
+                    # this is reached only when clang-cl is used anyway: set in
+                    # CXX, or for GPU host code.
                     raise RuntimeError(
                         "torch uses Intel OpenMP (libiomp5md.dll in torch/lib), "
                         "but its import library libiomp5md.lib was not found in "
