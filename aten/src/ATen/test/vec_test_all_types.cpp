@@ -1124,19 +1124,24 @@ namespace {
         // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         CACHE_ALIGN VT test_vals[vec::size()];
         //all sets will be within 0  2^(n-1)
-        auto power_sets = 1UL << (vec::size());
+        // 64-bit on every platform: unsigned long is 32 bits on Windows, where
+        // 1UL << 32 (32 lanes of a 16-bit type on AVX512) is undefined.
+        auto power_sets = uint64_t{1} << (vec::size());
         for (const auto expected : c10::irange(power_sets)) {
             // generate test_val based on expected
             for (int i = 0; i < vec::size(); ++i)
             {
-                if (expected & (1 << i)) {
+                if (expected & (uint64_t{1} << i)) {
                     test_vals[i] = (VT)0;
                 }
                 else {
                     test_vals[i] = (VT)0.897;
                 }
             }
-            int actual = vec::loadu(test_vals).zero_mask();
+            // zero_mask() returns the lane bits in an int; read them unsigned so
+            // that lane 31 of a 32-lane vector compares equal to bit 31 of expected.
+            uint64_t actual =
+                static_cast<uint32_t>(vec::loadu(test_vals).zero_mask());
             ASSERT_EQ(expected, actual) << "Failure Details:\n"
                 << std::hex << "Expected:\n#\t" << expected
                 << "\nActual:\n#\t" << actual;

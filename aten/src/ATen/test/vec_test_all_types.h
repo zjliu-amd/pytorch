@@ -1266,7 +1266,9 @@ std::enable_if_t<!is_complex<T>::value, T> local_lgamma(T x) {
     // lgamma(x) = log(pi / |sin(pi * x)|) - lgamma(1 - x) in double, with the
     // argument of sin reduced exactly to [-0.5, 0.5]; lgamma(1 - x) has a
     // positive argument, where this test checks the UCRT against Sleef too.
-    if (x < 0 && std::isfinite(x)) {
+    // Only below -0.5: near 0, pi / |sin(pi * x)| overflows for denormal x,
+    // and the UCRT is accurate there.
+    if (x < -0.5 && std::isfinite(x)) {
         const double xd = static_cast<double>(x);
         const double r = xd - std::nearbyint(xd);
         return static_cast<T>(
