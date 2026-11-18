@@ -863,14 +863,17 @@ class TestMatmulCuda(InductorTestCase):
     @parametrize("size", [32768])
     @parametrize("backend", ["cublaslt", "cublas"])
     def test_cublas_addmm_no_reduced_precision(self, small_size: int, size: int, dtype: torch.dtype, backend):
-        if backend == "cublas" and isRocmArchAnyOf(("gfx1151",)):
-            # Every output here is exactly 0 (65504 * K/2 - 65504 * K/2). rocBLAS fp16
-            # GEMMs with fp16 output on gfx1151 return -2**-8 in every element for any
-            # K from 4 to 32768 (-2**-9 for K = 2; with 1024 or 1 in place of 65504,
-            # -2**-12 or -2**-22), while the same product with fp32 output is exactly 0.
-            # This is not a reduced-precision reduction, which the test checks for.
-            raise unittest.SkipTest("rocBLAS fp16 GEMMs with fp16 output on gfx1151 return a nonzero "
-                                    "result (-2**-8) for sums that are exactly 0")
+        if backend == "cublas" and IS_WINDOWS and isRocmArchAnyOf(("gfx1151",)):
+            # Library defect, seen only with the Windows ROCm SDK (10.3.0a20261111) on
+            # gfx1151; not known on Linux. Every output here is exactly 0
+            # (65504 * K/2 - 65504 * K/2). rocBLAS fp16 x fp16 -> fp16 GEMMs return
+            # -2**-8 in every element for any K from 4 to 32768 (-2**-9 for K = 2; with
+            # 1024 or 1 in place of 65504, -2**-12 or -2**-22), while the same product
+            # with fp32 output is exactly 0. This is not a reduced-precision reduction,
+            # which is what the test checks for.
+            raise unittest.SkipTest("rocBLAS defect (Windows ROCm, gfx1151): fp16 x fp16 -> fp16 GEMM "
+                                    "returns -2**-8 in every element when the exact result is 0 "
+                                    "(fp32 output is exact)")
         with blas_library_context(backend):
             torch.backends.cuda.preferred_blas_library(backend)
             orig_precision = torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction

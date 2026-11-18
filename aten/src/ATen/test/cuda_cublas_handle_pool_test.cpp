@@ -1184,15 +1184,18 @@ TEST(CUDABlasHandlePoolDeathTest, LtHandleCreationWaitsForLegacyStream) {
     GTEST_SKIP() << "requires hipStreamWaitValue64";
   }
 #if defined(_WIN32) && defined(USE_ROCM)
-  // With the Windows HIP runtime (HIP 7.18 on gfx1151, both the driver's
-  // amdhip64 and the ROCm SDK's), creating the handle does not return within
-  // 10 s of the gate opening (the creation ends with a synchronization of the
-  // legacy stream). StreamDestroyWaitsForQueuedWork, which holds a
-  // non-blocking stream with the same hipStreamWaitValue64 gate, passes there;
-  // the wait on the legacy stream is the difference.
-  GTEST_SKIP() << "with the Windows HIP runtime, creating the handle does "
-                  "not return after the legacy stream's hipStreamWaitValue64 "
-                  "gate is opened from another stream";
+  // HIP runtime defect, seen only with the Windows HIP runtime (HIP 7.18 on
+  // gfx1151, both the driver's amdhip64 and the ROCm SDK's); not known on
+  // Linux. While the legacy (null) stream is blocked on hipStreamWaitValue64,
+  // hipblasLtCreate is called; after another stream writes the gated value,
+  // hipblasLtCreate (which ends by synchronizing the legacy stream) does not
+  // return within 10 s. StreamDestroyWaitsForQueuedWork, which gates a
+  // non-blocking stream the same way, passes there, so the wait on the
+  // legacy stream is the difference. Not narrowed further, because a stuck
+  // GPU wait risks a whole-machine reset on that platform.
+  GTEST_SKIP() << "HIP runtime defect (Windows): hipblasLtCreate does not "
+                  "return after the legacy stream's hipStreamWaitValue64 gate "
+                  "is opened by a write from another stream";
 #endif
   // Re-exec for a fresh pool, so that the handle is created rather than taken
   // from the spares other tests stocked.
