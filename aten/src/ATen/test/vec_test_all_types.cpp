@@ -852,7 +852,7 @@ namespace {
             .setTestSeed(TestSeed());
         test_unary<vec>(
             NAME_INFO(lgamma),
-            RESOLVE_OVERLOAD(std::lgamma),
+            RESOLVE_OVERLOAD(local_lgamma),
             [](vec v) { return v.lgamma(); },
             testCase);
     }

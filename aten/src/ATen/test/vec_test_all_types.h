@@ -1256,6 +1256,28 @@ std::enable_if_t<is_complex<Complex<T>>::value, Complex<T>> local_log2(Complex<T
 }
 
 template <typename T>
+std::enable_if_t<!is_complex<T>::value, T> local_lgamma(T x) {
+#if defined(_WIN32)
+    // The Windows UCRT's lgamma loses accuracy near the poles of negative
+    // arguments: lgammaf(-44.9999962f) returns -116.634613 and
+    // lgamma(-99.999999999999986) returns -331.86198661322283, where the
+    // exact values are -116.647270 and -331.85460524980596 (Sleef and glibc
+    // agree with these). For negative arguments, use the reflection formula
+    // lgamma(x) = log(pi / |sin(pi * x)|) - lgamma(1 - x) in double, with the
+    // argument of sin reduced exactly to [-0.5, 0.5]; lgamma(1 - x) has a
+    // positive argument, where this test checks the UCRT against Sleef too.
+    if (x < 0 && std::isfinite(x)) {
+        const double xd = static_cast<double>(x);
+        const double r = xd - std::nearbyint(xd);
+        return static_cast<T>(
+            std::log(c10::pi<double> / std::abs(std::sin(c10::pi<double> * r))) -
+            std::lgamma(1.0 - xd));
+    }
+#endif
+    return std::lgamma(x);
+}
+
+template <typename T>
 std::enable_if_t<!is_complex<T>::value, T> local_abs(T x) {
     return std::abs(x);
 }
