@@ -275,7 +275,13 @@ class CoordescTuner:
     @staticmethod
     def has_improvement(baseline, test):
         threshold = 0.001  # 0.1%
-        return test is not None and test < baseline * (1 - threshold)
+        # A negative baseline is a bogus timer reading (e.g. a negative GPU event
+        # time). Scaling it by (1 - threshold) would let an equal timing count as
+        # an improvement, and autotune() would cycle between cached configs
+        # forever, so scale it the other way. Unchanged for baseline >= 0,
+        # including inf.
+        factor = (1 - threshold) if baseline >= 0 else (1 + threshold)
+        return test is not None and test < baseline * factor
 
     def is_valid_config(self, config) -> bool:
         if self.is_mix_order_reduction:

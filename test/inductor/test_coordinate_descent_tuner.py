@@ -162,6 +162,30 @@ class TestCoordinateDescentTuner(TestCase):
         best_config = tuner.autotune(func, baseline_config)
         self.assertTrue(best_config.kwargs.get("XBLOCK") == 1, str(best_config))
 
+    def test_has_improvement(self):
+        has_improvement = CoordescTuner.has_improvement
+        self.assertTrue(has_improvement(1.0, 0.5))
+        self.assertFalse(has_improvement(1.0, 0.9995))
+        self.assertFalse(has_improvement(1.0, 1.0))
+        self.assertFalse(has_improvement(1.0, None))
+        # A failed or spilling baseline times as inf; any finite timing improves.
+        self.assertTrue(has_improvement(float("inf"), 1.0))
+        # A negative timing is a bogus measurement, but an equal one must still
+        # not count as an improvement.
+        self.assertFalse(has_improvement(-1.0, -1.0))
+        self.assertFalse(has_improvement(-1.0, -1.0005))
+        self.assertTrue(has_improvement(-1.0, -2.0))
+
+    def test_negative_timings_terminate(self):
+        """
+        Every config times the same negative value (as with negative GPU event
+        times). The search must stop instead of cycling between cached configs.
+        """
+        tuner = CoordescTuner(size_hints={"x": 2**20})
+        baseline_config = triton.Config({"XBLOCK": 16}, num_warps=4, num_stages=1)
+        best_config = tuner.autotune(lambda config: -0.01, baseline_config)
+        self.assertEqual(best_config.kwargs["XBLOCK"], 16)
+
     def test_get_neighbour_values(self):
         tuner = CoordescTuner()
 
