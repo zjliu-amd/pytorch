@@ -28,7 +28,7 @@ from torch._dynamo.device_interface import get_interface_for_device
 from torch._dynamo.testing import normalize_gm
 from torch._dynamo.utils import counters
 from torch._inductor import config as inductor_config
-from torch._inductor.cpp_builder import is_msvc_cl
+from torch._inductor.cpp_builder import is_clang, is_msvc_cl
 from torch._inductor.test_case import run_tests, TestCase
 from torch.nn.attention.flex_attention import flex_attention
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -267,7 +267,10 @@ main()
 
     def gen_cache_miss_log_prefix(self):
         if IS_WINDOWS:
-            if is_msvc_cl():
+            # Node names are demangled from torch's own binaries, which use the
+            # MSVC C++ ABI on Windows ("struct " prefix). Windows ROCm builds
+            # are compiled with clang-cl, which Inductor then also uses.
+            if is_msvc_cl() or is_clang():
                 return "Cache miss due to new autograd node: struct "
             else:
                 self.fail(
