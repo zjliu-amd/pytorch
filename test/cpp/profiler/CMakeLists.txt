@@ -28,9 +28,11 @@ if(USE_KINETO)
 
   target_compile_definitions(test_profiler_collection PRIVATE USE_GTEST USE_KINETO)
 
-  # Link libkineto explicitly. The test calls libkineto::api() and uses
-  # libkineto::GenericTraceActivity as a value type (which references its
-  # vtable, including GenericTraceActivity::log). Needed for Windows.
+  # Link libkineto explicitly. The test uses libkineto::GenericTraceActivity
+  # as a value type (which references its vtable, including
+  # GenericTraceActivity::log). Needed for Windows. It registers its child
+  # profilers through torch_cpu (registerChildProfilerFactory), not through
+  # this binary's own copy of libkineto::api().
   target_link_libraries(test_profiler_collection PRIVATE ${PROFILER_TEST_DEPENDENCIES} kineto)
   target_include_directories(test_profiler_collection PRIVATE
     ${ATen_CPU_INCLUDE}
