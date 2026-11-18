@@ -1257,7 +1257,9 @@ std::enable_if_t<is_complex<Complex<T>>::value, Complex<T>> local_log2(Complex<T
 
 template <typename T>
 std::enable_if_t<!is_complex<T>::value, T> local_lgamma(T x) {
-#if defined(_WIN32)
+// Only where Vectorized::lgamma is Sleef (AVX2/AVX512); the DEFAULT
+// Vectorized::lgamma is std::lgamma itself, so its reference stays std::lgamma.
+#if defined(_WIN32) && (defined(CPU_CAPABILITY_AVX2) || defined(CPU_CAPABILITY_AVX512))
     // The Windows UCRT's lgamma loses accuracy near the poles of negative
     // arguments: lgammaf(-44.9999962f) returns -116.634613 and
     // lgamma(-99.999999999999986) returns -331.86198661322283, where the
