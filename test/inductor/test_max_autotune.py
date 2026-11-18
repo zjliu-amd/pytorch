@@ -4957,6 +4957,11 @@ class TestMaxAutotuneSubproc(TestCase):
         with config.patch({"max_autotune": True, "autotune_in_subproc": True}):
             torch.compile(mm, dynamic=dynamic)(a, b)
 
+    @unittest.skipIf(
+        IS_WINDOWS and TEST_WITH_ROCM,
+        "hipEventElapsedTime returns negative times on Windows ROCm, so autotune "
+        "timings go negative (ROCm/TheRock#9383, pytorch#193658)",
+    )
     def test_max_autotune_profiler_benchmarker_smoke(self):
         """
         Smoke test that a simple max-autotune matmul runs with profiler
