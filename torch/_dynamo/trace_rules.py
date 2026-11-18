@@ -3475,6 +3475,13 @@ def _as_posix_path(path: str) -> str:
     return posix_path
 
 
+def _co_filename_as_posix(filename: str) -> str:
+    # The path lists and rule keys in this file are posix paths built with
+    # _as_posix_path, while a code object's co_filename uses the native
+    # separator. Only Windows differs; elsewhere the filename is used as is.
+    return _as_posix_path(filename) if sys.platform == "win32" else filename
+
+
 def _strip_init_py(s: str) -> str:
     suffix = "__init__.py"
     s = s.removesuffix(suffix)
@@ -4141,6 +4148,7 @@ def get_ngb_suppress_inlinelist() -> set[str]:
 
 
 def is_ngb_suppressed_inline(filename: str) -> bool:
+    filename = _co_filename_as_posix(filename)
     return any(filename.startswith(d) for d in get_ngb_suppress_inlinelist())
 
 
@@ -4271,6 +4279,8 @@ def _lookup_inner(
                 reasons.add("get_torch_obj_rule_map")
             return rule
     elif name is not None and filename is not None and not is_direct_call:
+        # The ".py#" keys are built from _module_dir (posix separators).
+        filename = _co_filename_as_posix(filename)
         if name.startswith(TORCH_DYNAMO_RESUME_IN_PREFIX):
             rule = get_torch_obj_rule_map().get(
                 filename + "#" + TORCH_DYNAMO_RESUME_IN_PREFIX, None

@@ -747,12 +747,15 @@ class UserFunctionVariable(BaseUserFunctionVariable):
 
     def should_allow_nested_graph_breaks(self) -> bool:
         from torch._dynamo.trace_rules import (
+            _co_filename_as_posix,
             BUILTIN_INLINE_WHEN_CALLED,
             is_ngb_suppressed_inline,
         )
 
         filename = self.get_filename()
-        if any(filename.startswith(d) for d in BUILTIN_INLINE_WHEN_CALLED):
+        # BUILTIN_INLINE_WHEN_CALLED holds posix paths.
+        posix_filename = _co_filename_as_posix(filename)
+        if any(posix_filename.startswith(d) for d in BUILTIN_INLINE_WHEN_CALLED):
             return False
         if is_ngb_suppressed_inline(filename):
             return False
