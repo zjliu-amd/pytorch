@@ -8465,17 +8465,24 @@ class DistributedTest:
             group_gloo = dist.new_group(
                 timeout=timedelta(seconds=60), backend=dist.Backend.GLOO
             )
-            # Set TORCH_NCCL_BLOCKING_WAIT and use a new NCCL group to improve test
-            # determinism.
-            os.environ["TORCH_NCCL_BLOCKING_WAIT"] = "1"
-            group_to_use = dist.new_group(
-                backend=dist.get_backend(), timeout=timedelta(seconds=5)
-            )
+            # Use the default timeout: no collective here is expected to time out,
+            # and a short one fails the DDP constructor when a rank is slow to start.
+            group_to_use = dist.new_group(backend=dist.get_backend())
             torch.cuda.set_device(self.rank)
 
             # Create a valid model. The constructor initializes the logger that we use later.
             # We never actually use the rest of the model - we only need its logger.
             net = EmbeddingNetDifferentParams(0)
+            # LOCAL VERIFICATION HARNESS -- not for upstream. Simulates one rank
+            # arriving late (PTDBG_LAG_S seconds) at the DDP constructor's first
+            # collective, as a slow CI runner does. For NCCL the communicator is
+            # initialized first so the lag is not absorbed by lazy comm init.
+            if os.environ.get("PTDBG_LAG_S"):
+                if dist.get_backend(group_to_use) == dist.Backend.NCCL:
+                    dev = torch.device("cuda", self.rank)
+                    group_to_use._get_backend(dev).eager_connect_single_device(dev)
+                if int(os.environ.get("PTDBG_LAG_RANK", "1")) == self.rank:
+                    time.sleep(float(os.environ["PTDBG_LAG_S"]))
             net = torch.nn.parallel.DistributedDataParallel(
                 net.to(self.rank),
                 device_ids=[self.rank],
@@ -8519,13 +8526,23 @@ class DistributedTest:
             group_gloo = dist.new_group(
                 timeout=timedelta(seconds=60), backend=dist.Backend.GLOO
             )
-            group_to_use = dist.new_group(
-                backend=dist.get_backend(), timeout=timedelta(seconds=5)
-            )
+            # Use the default timeout: the expected error is a param shape mismatch,
+            # not a timeout.
+            group_to_use = dist.new_group(backend=dist.get_backend())
             torch.cuda.set_device(self.rank)
 
             # Create a valid model. The constructor initializes the logger that we use later.
             net = EmbeddingNetDifferentParams(0)
+            # LOCAL VERIFICATION HARNESS -- not for upstream. Simulates one rank
+            # arriving late (PTDBG_LAG_S seconds) at the DDP constructor's first
+            # collective, as a slow CI runner does. For NCCL the communicator is
+            # initialized first so the lag is not absorbed by lazy comm init.
+            if os.environ.get("PTDBG_LAG_S"):
+                if dist.get_backend(group_to_use) == dist.Backend.NCCL:
+                    dev = torch.device("cuda", self.rank)
+                    group_to_use._get_backend(dev).eager_connect_single_device(dev)
+                if int(os.environ.get("PTDBG_LAG_RANK", "1")) == self.rank:
+                    time.sleep(float(os.environ["PTDBG_LAG_S"]))
             net = torch.nn.parallel.DistributedDataParallel(
                 net.to(self.rank),
                 device_ids=[self.rank],
