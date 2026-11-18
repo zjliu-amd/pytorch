@@ -71,9 +71,12 @@ TEST(XpuActivityFilterTest, SyncSelectionFollowsDefaultsAndFilters) {
   const auto configured_activities =
       std::make_shared<std::set<libkineto::ActivityType>>();
   // Libkineto has no unregister API, so this factory lives for the process.
-  libkineto::api().registerProfilerFactory([configured_activities]() {
-    return std::make_unique<CapturingProfiler>(configured_activities);
-  });
+  // Registered through torch_cpu: this binary links its own static libkineto,
+  // whose libkineto::api() is a different singleton on Windows.
+  torch::profiler::impl::kineto::registerChildProfilerFactory(
+      [configured_activities]() {
+        return std::make_unique<CapturingProfiler>(configured_activities);
+      });
   // Register without device support so the test does not depend on the host.
   libkineto_init(/*cpuOnly=*/true, /*logOnError=*/true);
 

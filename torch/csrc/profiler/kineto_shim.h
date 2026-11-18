@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -23,6 +24,7 @@ namespace libkineto {
 class GenericTraceActivity;
 struct CpuTraceBuffer;
 class ActivityTraceInterface;
+class IActivityProfiler;
 } // namespace libkineto
 #endif
 
@@ -132,6 +134,16 @@ TORCH_API void prepareTrace(
     const std::string& trace_id = "",
     const ActivityFilter& activity_filter = {},
     const ProfilerExtensionMap& profiler_extensions = {});
+
+#ifdef USE_KINETO
+// Registers a child profiler factory with the libkineto instance that
+// torch_cpu uses. libkineto is a static library, so a binary that links it
+// too (e.g. a C++ test) has its own libkineto::api() singleton; on Windows
+// that copy is separate from the one inside torch_cpu.dll and its factories
+// never reach the profiler. Register through this function instead.
+TORCH_API void registerChildProfilerFactory(
+    std::function<std::unique_ptr<libkineto::IActivityProfiler>()> factory);
+#endif // USE_KINETO
 
 void toggleCollectionDynamic(const bool enable);
 void startTrace();

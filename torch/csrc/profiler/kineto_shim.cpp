@@ -495,6 +495,13 @@ void prepareTrace(
 #endif // USE_KINETO
 }
 
+#ifdef USE_KINETO
+void registerChildProfilerFactory(
+    std::function<std::unique_ptr<libkineto::IActivityProfiler>()> factory) {
+  libkineto::api().registerProfilerFactory(factory);
+}
+#endif // USE_KINETO
+
 void toggleCollectionDynamic(const bool enable) {
 #ifdef USE_KINETO
   // TODO: We may want to consider adding another input arg for this function

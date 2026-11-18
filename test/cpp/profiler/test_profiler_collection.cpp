@@ -11,8 +11,11 @@
 // activities into a real profiling session.
 //
 // To add new tests in this file:
-//   - Register child profilers via libkineto::api().registerProfilerFactory()
-//     directly. PrivateUse1ProfilerRegistry::registerFactory() is one-shot
+//   - Register child profilers via
+//     torch::profiler::impl::kineto::registerChildProfilerFactory(), not
+//     libkineto::api() (this binary links its own static libkineto, whose
+//     singleton is separate from torch_cpu's on Windows).
+//     PrivateUse1ProfilerRegistry::registerFactory() is one-shot
 //     (it forwards to libkineto on first call only), so it cannot layer
 //     additional mocks on top of whatever a prior test already installed.
 //   - Wrap assertions on TORCH_WARN_ONCE output in c10::WarningUtils::
@@ -221,9 +224,9 @@ TEST(ProfilerCollectionTest, DuplicateFlowIdHandledGracefully) {
   c10::WarningUtils::WarningHandlerGuard handler_guard(&handler);
   c10::WarningUtils::WarnAlways warn_always_guard(true);
 
-  // Register a child profiler directly with libkineto. The session it
+  // Register a child profiler with torch_cpu's libkineto. The session it
   // returns is what injects duplicate flow IDs into the trace.
-  libkineto::api().registerProfilerFactory(
+  torch::profiler::impl::kineto::registerChildProfilerFactory(
       []() { return std::make_unique<DuplicateFlowMockProfiler>(); });
 
   // The PrivateUse1 registry needs a factory so prepareProfiler triggers

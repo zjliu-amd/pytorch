@@ -75,9 +75,12 @@ TEST(MtiaActivityFilterTest, CollectiveSelectionUsesFiltersAndAvailability) {
       std::make_shared<std::set<libkineto::ActivityType>>();
   // Libkineto has no unregister API. This dedicated binary contains one test,
   // so the process-lifetime factory cannot affect another test case.
-  libkineto::api().registerProfilerFactory([configured_activities]() {
-    return std::make_unique<CapturingProfiler>(configured_activities);
-  });
+  // Registered through torch_cpu: this binary links its own static libkineto,
+  // whose libkineto::api() is a different singleton on Windows.
+  torch::profiler::impl::kineto::registerChildProfilerFactory(
+      [configured_activities]() {
+        return std::make_unique<CapturingProfiler>(configured_activities);
+      });
   // Register without device support to keep the test hardware-independent
   // while exercising the same activity selection logic passed to registered
   // profilers.
