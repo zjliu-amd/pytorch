@@ -658,6 +658,9 @@ class TestKernelConfigs(TestCase):
         self.assertEqual(ns["call"]([x])[0], result)
 
     @requires_gpu_and_triton
+    # The module precompiles its kernels at load only with a compile pool
+    # (async_compile.wait); compile_threads defaults to 1 on win32.
+    @config.patch(compile_threads=2)
     def test_kernel_without_a_compile_time_config_tunes_on_first_launch(self):
         # As for a kernel the block leaves with more than one launcher.
         block = PythonWrapperCodegen.generate_and_run_autotune_block
@@ -848,6 +851,9 @@ class TestKernelConfigs(TestCase):
             self.assertEqual(kernel.fallback().mutated_arg_names, mutated)
 
     @requires_gpu_and_triton
+    # The module precompiles its kernels at load only with a compile pool
+    # (async_compile.wait); compile_threads defaults to 1 on win32.
+    @config.patch(compile_threads=2)
     def test_an_unrelated_error_in_a_pinned_kernel_does_not_fall_back(self):
         x = torch.randn(64, 3000, device=GPU_TYPE)
         _, code = _code_for(lambda x: x.sum(-1), x)
@@ -865,6 +871,9 @@ class TestKernelConfigs(TestCase):
         self.assertEqual(len(calls), 1)
 
     @requires_gpu_and_triton
+    # The module precompiles its kernels at load only with a compile pool
+    # (async_compile.wait); compile_threads defaults to 1 on win32.
+    @config.patch(compile_threads=2)
     def test_falling_back_keeps_the_launch_being_recorded(self):
         # run() records a DebugMode launch before a lazy precompile, which is where a
         # pinned kernel may fall back; the launch must still be finalized afterwards.

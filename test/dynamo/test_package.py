@@ -106,6 +106,19 @@ def compiled_region_with_backend_id_for_package_test():
     return __compiled_fn_0_00000000_0000_0000_0000_000000000000()  # noqa: F821
 
 
+class _ColdCache:
+    """An autotune cache that always misses. A kernel compiled in this process keeps
+    its caches (AutotuneCache.save), and the FX graph cache pickles them with it; a
+    Mock does not pickle. Kernels compile in this process when no compile worker pool
+    is ready, as on win32, where compile_threads defaults to 1."""
+
+    def get(self, key):
+        return None
+
+    def put(self, key, value):
+        pass
+
+
 class UnpicklableConfig:
     # Like ConfigThatCannotPickle, but the failure is not an AttributeError.
     scale = 2.0
@@ -2150,8 +2163,7 @@ class TestPackageAccelerator(torch._inductor.test_case.TestCase):
             torch.randn(4, device=device, dtype=dtype)
             for dtype in (torch.float32, torch.float64)
         ]
-        cold = unittest.mock.Mock()
-        cold.get.return_value = None
+        cold = _ColdCache()
         ctx = DiskDynamoStore()
         with (
             fresh_cache(),

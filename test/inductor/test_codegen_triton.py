@@ -1933,11 +1933,6 @@ def helper(x):
 
     @unittest.skipUnless(has_triton_package(), "requires Triton package")
     def test_fp8_dtype_support_matrix(self):
-        self.assertFalse(
-            is_triton_fp8_dtype_supported(
-                torch.float8_e4m3fn, triton_backend="cuda", triton_arch=80
-            )
-        )
         self.assertTrue(
             is_triton_fp8_dtype_supported(
                 torch.float8_e4m3fn, triton_backend="cuda", triton_arch=89
@@ -1966,6 +1961,20 @@ def helper(x):
         self.assertTrue(
             is_triton_fp8_dtype_supported(
                 torch.float8_e5m2fnuz, triton_backend="hip", triton_arch="gfx942"
+            )
+        )
+        # Last, as it may skip. The answer is the installed Triton's: the pinned
+        # Triton's CUDA backend lists fp8e4nv from sm89 on, while triton-windows
+        # (used by Windows ROCm builds) lists it for every arch.
+        from triton.backends.compiler import GPUTarget
+        from triton.compiler.compiler import make_backend
+
+        sm80 = make_backend(GPUTarget("cuda", 80, 32)).parse_options({})
+        if "fp8e4nv" in sm80.supported_fp8_dtypes:
+            self.skipTest("the installed Triton supports fp8e4nv on sm80")
+        self.assertFalse(
+            is_triton_fp8_dtype_supported(
+                torch.float8_e4m3fn, triton_backend="cuda", triton_arch=80
             )
         )
 
