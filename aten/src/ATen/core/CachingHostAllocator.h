@@ -24,6 +24,17 @@ namespace at {
 using c10::CachingAllocator::Stat;
 using c10::CachingAllocator::DurationStat;
 
+#ifdef _WIN32
+namespace detail {
+// Returns a handle to the calling thread that stays valid after the thread
+// exits (nullptr on failure), for has_thread_exited(). Never closed.
+TORCH_API void* open_current_thread_handle();
+// Whether the thread behind a handle from open_current_thread_handle() has
+// terminated. Does not block.
+TORCH_API bool has_thread_exited(void* thread_handle);
+} // namespace detail
+#endif
+
 /**
  * HostBlock is typically a fundamental memory block used in pinned memory. It
  * is likely related to Event and Stream of device runtime. It is probably a
@@ -316,16 +327,25 @@ struct CachingHostAllocatorImpl {
   virtual ~CachingHostAllocatorImpl() {
     if (active_) {
       active_ = false;
-#if !defined(_WIN32)
-      getBackgroundThreadPool()->waitWorkComplete();
-#else
+#ifdef _WIN32
       // The allocator is a static object, so this runs during process exit.
-      // On Windows, ExitProcess terminates every other thread before static
-      // destructors run, so the background thread never sees active_ turn
-      // false and the pool never reports its task complete: waiting here
-      // deadlocks the exiting process. The thread is already gone, so there
-      // is nothing to wait for.
+      // When torch is loaded as DLLs, it runs while the DLL unloads, after
+      // ExitProcess has terminated every other thread: the background task
+      // never sees active_ turn false, the pool never reports it complete,
+      // and waiting would deadlock the exiting process. When libtorch is
+      // linked statically into an executable, it runs from the CRT's atexit
+      // handlers while the background thread is still alive and using this
+      // object, so it must be waited for. Skip the wait only if the thread
+      // has actually exited. If the task has not started yet, its thread is
+      // unknown; wait, as a live thread will start it, see active_ == false
+      // and finish.
+      void* background_thread = background_thread_.load();
+      if (background_thread != nullptr &&
+          detail::has_thread_exited(background_thread)) {
+        return;
+      }
 #endif
+      getBackgroundThreadPool()->waitWorkComplete();
     }
   }
 
@@ -399,6 +419,9 @@ struct CachingHostAllocatorImpl {
       static bool background_thread_flag [[maybe_unused]] = [this] {
         active_ = true;
         getBackgroundThreadPool()->run([&]() {
+#ifdef _WIN32
+          background_thread_ = detail::open_current_thread_handle();
+#endif
           while (active_) {
             // Background thread conservatively processes default pool
             // events only. Private pools never use a background
@@ -1357,6 +1380,11 @@ private:
   // Indicates whether the event-processing thread pool is active.
   // Set to false in the destructor to signal background threads to stop.
   std::atomic<bool> active_{false};
+#ifdef _WIN32
+  // Handle of the thread running the background task, once it has started.
+  // See the destructor.
+  std::atomic<void*> background_thread_{nullptr};
+#endif
 
   // Memory profiling state -- see lock ordering comment above.
   std::mutex profiling_mutex_;
