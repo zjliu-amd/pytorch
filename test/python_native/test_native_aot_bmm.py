@@ -15,6 +15,10 @@ from torch.testing._internal.common_device_type import (
     dtypes,
     instantiate_device_type_tests,
 )
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_utils import (
     HardwareClassification,
     instantiate_parametrized_tests,
@@ -32,6 +36,10 @@ def _ran_aot(fn) -> bool:
     # masked rather than a profiler name match.
     from torch.profiler import profile, ProfilerActivity
 
+    # Attribution reads kernel names from the device trace, which the profiler
+    # can only provide with a device tracing backend.
+    if not device_tracing_supported("cuda"):
+        raise unittest.SkipTest(DEVICE_TRACING_UNSUPPORTED_MSG)
     with profile(activities=[ProfilerActivity.CUDA]) as prof:
         fn()
         torch.cuda.synchronize()

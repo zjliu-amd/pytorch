@@ -35,9 +35,12 @@ from torch._inductor.utils import (
 )
 from torch._inductor.virtualized import V
 from torch._inductor.wrapper_benchmark import get_kernel_category_by_source_code
-from torch.profiler import kineto_available
 from torch.testing import FileCheck
 from torch.testing._internal.common_cuda import SM90OrLater
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -733,14 +736,15 @@ class ComboKernelTests(TestCase):
         # meta keys (XBLOCK, YBLOCK) but SequentialFlattenComboKernelGrid looks
         # up XBLOCK_0, XBLOCK_1 etc. — dict.get returns None, and ceildiv treats
         # None as block=1, hardcoding the grid to xnumel*ynumel per subkernel.
-        # kineto_available: CI runs this file with TORCHINDUCTOR_CPP_WRAPPER=1, so on a
-        # USE_KINETO=0 build both halves above are true and the GPU-only profile below
-        # raises. Extending the condition rather than gating the whole method keeps the
-        # eager-path coverage above.
+        # device_tracing_supported: CI runs this file with TORCHINDUCTOR_CPP_WRAPPER=1,
+        # so on a build without device tracing (USE_KINETO=0, or a CPU-only Kineto)
+        # both halves above are true and the GPU-only profile below raises. Extending
+        # the condition rather than gating the whole method keeps the eager-path
+        # coverage above.
         if (
             torch._inductor.config.cpp_wrapper
             and self.combo_kernel_per_subkernel_blocks
-            and kineto_available()
+            and device_tracing_supported(GPU_TYPE)
         ):
             from torch.profiler import ProfilerActivity
 
@@ -1206,7 +1210,9 @@ class ComboKernelTests(TestCase):
         # 3D poi (x, y, z) are separated from combo kernels
         self.assertEqual(torch._inductor.metrics.generated_kernel_count, 2)
 
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(
+        not device_tracing_supported(GPU_TYPE), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     @skipIfXpu(msg="Profiler JSON traceEvents is not supported on XPU")
     @requires_gpu_and_triton
     @fresh_cache()
@@ -1287,7 +1293,9 @@ class ComboKernelTests(TestCase):
         else:
             FileCheck().check("pid_offset = pid").run(code[0])
 
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(
+        not device_tracing_supported(GPU_TYPE), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     @skipIfXpu(msg="Profiler JSON traceEvents is not supported on XPU")
     @requires_gpu_and_triton
     @torch._dynamo.config.patch("assume_static_by_default", False)
@@ -1430,7 +1438,9 @@ class ComboKernelTests(TestCase):
         self.assertEqual(out_eager, out_compiled)
         self.assertEqual(torch._inductor.metrics.generated_kernel_count, 1)
 
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(
+        not device_tracing_supported(GPU_TYPE), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     @skipIfXpu(msg="Profiler JSON traceEvents is not supported on XPU")
     @requires_gpu_and_triton
     @unittest.skipIf(not SM90OrLater, "Avoid oom on CI")

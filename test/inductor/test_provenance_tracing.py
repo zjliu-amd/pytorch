@@ -41,6 +41,10 @@ from torch._inductor.test_case import run_tests, TestCase
 from torch._inductor.utils import run_and_get_code, run_and_get_cpp_code
 from torch._inductor.virtualized import V
 from torch.autograd import _disable_profiler, _enable_profiler, _prepare_profiler
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     IS_MACOS,
@@ -745,6 +749,9 @@ class TestProvenanceTracingStackTraces(TestCase):
         self.assertTrue(any(n.startswith("## Call CompiledFxGraph ") for n in names))
 
     @requires_cuda_and_triton
+    @unittest.skipIf(
+        not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     @torch._inductor.config.patch(
         {
             "trace.provenance_tracking_level": 2,

@@ -56,7 +56,12 @@ from torch.testing._internal.common_cuda import TEST_MULTIGPU
 from torch.testing._internal.common_device_type import (
     instantiate_device_type_tests,
     onlyAccelerator,
+    skipCUDAIf,
     skipXPUIf,
+)
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
 )
 from torch.testing._internal.common_utils import (
     HardwareClassification,
@@ -2550,6 +2555,7 @@ class TestProfilerDevice(TestCase):
                 self._validate_basic_json(report["traceEvents"], device_available)
 
     @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_kineto(self, device):
         device_type = device.split(":")[0]
         with _profile(use_device=device_type, use_kineto=True):
@@ -2588,6 +2594,7 @@ class TestProfilerDevice(TestCase):
         self._check_stats(p._stats)
 
     @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_trace_only_export_matches_default(self, device):
         """trace_only=True must produce the same chrome trace metadata as the default path."""
         device_type = device.split(":")[0]
@@ -3266,6 +3273,7 @@ if KinetoStepTracker.current_step() != initial_step + 2 * niters:
             verify_events(events)
 
     @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_profiler(self, device):
         """Basic test for torch.profiler.profile API."""
         device_type = device.split(":")[0]
@@ -3294,6 +3302,7 @@ if KinetoStepTracker.current_step() != initial_step + 2 * niters:
 
     @onlyAccelerator
     @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_activity_filter_nonmember_type_name(self, device):
         """Activity type name that is not a member of the requested activity group raises RuntimeError."""
         device_type = device.split(":")[0]
@@ -3308,6 +3317,7 @@ if KinetoStepTracker.current_step() != initial_step + 2 * niters:
 
     @onlyAccelerator
     @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_activity_filter_empty_list(self, device):
         """Passing an empty list to activities means not collecting for the specified activity."""
         device_type = device.split(":")[0]
@@ -3326,6 +3336,7 @@ if KinetoStepTracker.current_step() != initial_step + 2 * niters:
     )
     @onlyAccelerator
     @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_kineto_kernel_metadata_in_trace(self, device):
         device_type = device.split(":")[0]
         with profile(activities=get_profiler_activities(device_type)) as prof:
@@ -3875,6 +3886,7 @@ class TestProfilerDeviceStopped(TestCase):
             schedule=torch.profiler.schedule(**schedule_kwargs),
         )
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_enters_device_stopped_from_warmup(self, device):
         p = self._make_profiler(device, wait=0, warmup=2, active=2)
         with patch(self.PATCH_TARGET, return_value=True):
@@ -3885,6 +3897,7 @@ class TestProfilerDeviceStopped(TestCase):
             self.assertEqual(p.current_action, ProfilerAction.DEVICE_STOPPED)
             p.stop()
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_enters_device_stopped_from_record(self, device):
         p = self._make_profiler(device, wait=0, warmup=1, active=3)
         with patch(self.PATCH_TARGET, return_value=False):
@@ -3950,6 +3963,7 @@ class TestProfilerDeviceStopped(TestCase):
             # cycle 2 R&S -> stop fires on_trace_ready a second time
             self.assertEqual(callback_count[0], 2)
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_device_stopped_persists_through_cycle(self, device):
         """Once in DEVICE_STOPPED, the profiler stays there until the schedule
         moves to WARMUP (new cycle) or NONE (end)."""
@@ -3976,6 +3990,7 @@ class TestProfilerDeviceStopped(TestCase):
             self.assertEqual(p.current_action, ProfilerAction.WARMUP)
             p.stop()
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_device_stopped_recovers_without_warmup(self, device):
         """With warmup=0 (and wait=0), the schedule never produces WARMUP or
         NONE between cycles. DEVICE_STOPPED must still exit at cycle
@@ -4005,6 +4020,7 @@ class TestProfilerDeviceStopped(TestCase):
             self.assertEqual(p.current_action, ProfilerAction.RECORD)
             p.stop()
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_device_stopped_exits_via_wait_phase(self, device):
         """With wait > 0, the NONE phase between cycles is the natural
         exit path out of DEVICE_STOPPED. After the wait, profiling resumes
@@ -4050,6 +4066,7 @@ class TestProfilerDeviceStopped(TestCase):
             self.assertEqual(p.current_action, ProfilerAction.RECORD)
             p.stop()
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_device_stopped_persists_through_multistep_warmup(self, device):
         """With warmup >= 2, consecutive WARMUP steps are mid-cycle, not
         cycle boundaries. DEVICE_STOPPED must persist through the entire
@@ -4085,6 +4102,7 @@ class TestProfilerDeviceStopped(TestCase):
             self.assertEqual(p.current_action, ProfilerAction.NONE)
             p.stop()
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_warmup_to_device_stopped_fires_trace_ready(self, device):
         """When DEVICE_STOPPED is entered from WARMUP (e.g. active=1
         schedule where every R&S step gets converted to DS), the
@@ -4125,6 +4143,7 @@ class TestProfilerDeviceStopped(TestCase):
             self.assertEqual(callback_count[0], 2)
             p.stop()
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_start_after_stop_in_device_stopped(self, device):
         """A user may call start() after a stop() that left current_action
         in DEVICE_STOPPED. The second start() must re-derive state from
@@ -4205,6 +4224,7 @@ class TestProfilerDeviceStopped(TestCase):
         # stop() runs without re-exiting an already-exited record_function.
         p.stop()
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_device_stopped_recovers_across_infinite_cycles(self, device):
         """With repeat=0 (infinite cycles), DEVICE_STOPPED entry and
         recovery must work across multiple cycles, not just one."""
@@ -4297,6 +4317,7 @@ class TestProfilerDeviceStopped(TestCase):
         ):
             p._transit_action(prev, ProfilerAction.DEVICE_STOPPED)
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_device_stopped_with_real_kineto(self, device):
         """Integration test: when _is_kineto_stopped flips True mid-run
         against a live Kineto session, the DEVICE_STOPPED transition must
@@ -4543,6 +4564,7 @@ class TestProfilerEventsParityDevice(TestCase):
 
     hw_classification = HardwareClassification.ACCELERATOR
 
+    @skipCUDAIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_profiler_flow_events_parity(self, device):
         """Verify that async CPU->GPU flow fields on events() match Chrome trace JSON."""
         device_type = device.split(":")[0]
@@ -4707,6 +4729,9 @@ instantiate_device_type_tests(
 
 
 @unittest.skipIf(not kineto_available(), "Kineto is required")
+@unittest.skipIf(
+    not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG
+)
 class TestProfilerEventsParityCudaOnly(TestCase):
     """Structured-metadata parity tests keyed on CUPTI-specific trace
     categories/fields (cuda_runtime, cbid, cid, ...) that have no
@@ -5559,6 +5584,9 @@ class TestChromeTraceInlineAnnotations(TestCase):
 
 @unittest.skipIf(not kineto_available(), "Kineto is required")
 @unittest.skipIf(not torch.cuda.is_available(), "CUDA is required")
+@unittest.skipIf(
+    not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG
+)
 @instantiate_parametrized_tests
 class TestMetadataJsonFormatCUDA(TestCase):
     """Guard the format of ITraceActivity.metadataJson() for kernel events.

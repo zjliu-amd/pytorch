@@ -30,7 +30,6 @@ from torch import inf, nan
 from itertools import product, combinations, permutations, chain
 from functools import partial
 from torch import multiprocessing as mp
-from torch.profiler import kineto_available
 from torch.testing import make_tensor
 from torch.testing._internal.common_optimizers import (
     optim_db, optims, _get_optim_inputs_including_global_cliquey_kwargs)
@@ -68,6 +67,7 @@ from torch.testing._internal.common_cuda import (
     tf32_on_and_off, TEST_CUDNN, TEST_MULTIGPU,
     _create_scaling_case, _create_scaling_models_optimizers)
 from torch.testing._internal.common_mkldnn import reduced_f32_on_and_off
+from torch.testing._internal.common_profiler import DEVICE_TRACING_UNSUPPORTED_MSG, device_tracing_supported
 from torch.testing._internal.common_dtype import (
     floating_types_and, get_all_math_dtypes, all_types_and_complex_and, complex_types,
     all_types_and, floating_types, floating_and_complex_types, integral_types_and,
@@ -3457,7 +3457,7 @@ class TestTorchDeviceType(TestCase):
                          src.cpu().t().contiguous().view(torch.uint8))
 
     @onlyCUDA
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     @dtypes(torch.uint8, torch.float16, torch.bfloat16, torch.float32)
     @parametrize("case", ("below", "at", "offset", "pitch"))
     def test_copy_transpose_tiled_small(self, device, dtype, case):
@@ -3489,7 +3489,7 @@ class TestTorchDeviceType(TestCase):
     #   small_slices   slices individually below the size gate whose aggregate
     #                  is above it
     @onlyCUDA
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     @dtypes(torch.uint8, torch.bfloat16, torch.float32, torch.float64)
     @parametrize("layout", ("batch_first", "permute_4d", "permute_5d", "odd", "padded_src_batch",
                             "padded_dst_batch", "broadcast", "big_batch", "small_slices"))
@@ -3550,7 +3550,7 @@ class TestTorchDeviceType(TestCase):
     # stay on the generic path (the tiled kernel is slower there); 2D transposes
     # are not subject to the guard.
     @onlyCUDA
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     @dtypes(torch.uint8, torch.bfloat16, torch.float32, torch.float64)
     def test_copy_transpose_tiled_small_slices_rejected(self, device, dtype):
         def tiled(src):
@@ -3611,7 +3611,7 @@ class TestTorchDeviceType(TestCase):
     # At the 4 MiB gate, require the chunk kernel, exact bytes and untouched padding.
     # CPU backing views keep expected bytes independent of the kernel under test.
     @onlyCUDA
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     @dtypes(torch.uint8, torch.bfloat16, torch.float32, torch.float64)
     @parametrize("layout", ("src_pitch", "dst_pitch", "both_pitch", "permute_4d", "permute_4d_back",
                             "permute_5d", "broadcast"))
@@ -3661,7 +3661,7 @@ class TestTorchDeviceType(TestCase):
     # Row bytes, pitch and base offset must all be 16-byte multiples, on the
     # source and on the destination independently; otherwise the generic kernel runs.
     @onlyCUDA
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     @dtypes(torch.uint8, torch.bfloat16, torch.float32)
     def test_copy_strided_chunk_alignment(self, device, dtype):
         element_size = torch.empty((), dtype=dtype).element_size()
@@ -3696,7 +3696,7 @@ class TestTorchDeviceType(TestCase):
 
     # Copies that must stay on the generic kernel and still be correct.
     @onlyCUDA
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_copy_strided_chunk_rejects(self, device):
         def check(dst, src):
             expected = src.cpu()
@@ -3729,7 +3729,7 @@ class TestTorchDeviceType(TestCase):
     # pieces start 8 bytes off and must fall back after rechecking alignment.
     @onlyCUDA
     @largeTensorTest("12GB", "cuda")
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_copy_strided_chunk_64bit(self, device):
         for width, used in ((2**31 + 32, True), (2**31 + 16, False)):
             src = torch.randint(0, 256, (1, width), dtype=torch.uint8, device=device).expand(2, width)
@@ -3745,7 +3745,7 @@ class TestTorchDeviceType(TestCase):
     # independently per side, padded rows, offset bases, random dtype and size.
     # The CPU repeats each copy on the dst backing buffer as the reference.
     @onlyCUDA
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_copy_strided_chunk_fuzz(self, device):
         rng = random.Random(0)
         dtypes = (torch.uint8, torch.int16, torch.bfloat16, torch.float32, torch.float64, torch.complex64)
@@ -7391,7 +7391,7 @@ class TestTorchCUDA(TestCase):
         with self.assertWarnsOnceRegex(UserWarning, msg):
             torch.cuda.DoubleTensor([0])
 
-    @unittest.skipIf(not torch.autograd.kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     @unittest.skipIf(TEST_WITH_ROCM, "which path dense zero_ takes is ROCm-version dependent; see zero_cuda_")
     def test_zero_dense_emits_memset(self, device):
         base = torch.ones(64, 96, device=device)
@@ -7401,7 +7401,7 @@ class TestTorchCUDA(TestCase):
         names = tuple(event.key for event in prof.key_averages())
         self.assertTrue(any("Memset" in name for name in names), names)
 
-    @unittest.skipIf(not torch.autograd.kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     def test_zero_strided_emits_fill_kernel(self, device):
         base = torch.ones(64, 96, device=device)
         with torch.profiler.profile() as prof:
@@ -7429,7 +7429,7 @@ class TestTorchCUDA(TestCase):
             torch.cuda.synchronize()
             self.assertEqual(base.count_nonzero().item(), 0)
 
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     @dtypes(torch.bfloat16, torch.half)
     def test_reduced_type_float_copy_emits_vectorized_kernel(self, device, dtype):
         src = make_tensor((1024, 1024), dtype=dtype, device=device)
@@ -7440,7 +7440,7 @@ class TestTorchCUDA(TestCase):
         names = tuple(event.key for event in prof.key_averages())
         self.assertTrue(any("vectorized_elementwise_kernel" in name for name in names), names)
 
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG)
     @parametrize("src_dtype,dst_dtype", [(torch.int32, torch.int64),
                                          (torch.bool, torch.int64),
                                          (torch.bool, torch.float64)])

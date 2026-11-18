@@ -109,6 +109,10 @@ from torch.testing._internal.common_dtype import (
     get_all_dtypes,
     highest_precision_float,
 )
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_quantization import (
     _dynamically_quantize_per_channel,
     _group_quantize_tensor_symmetric,
@@ -20421,6 +20425,9 @@ def forward(self, arg0_1: "Sym(s77)", arg1_1: "Sym(s27)", arg2_1: "Sym(s53)", ar
         self.common(Model(), inputs)
 
     @requires_gpu_and_triton
+    @unittest.skipIf(
+        not device_tracing_supported(GPU_TYPE), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     @parametrize("use_cat", [True, False])
     def test_copy_non_blocking_is_pinned(self, use_cat):
         def f(a_list):

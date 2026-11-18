@@ -23,6 +23,10 @@ from torch._inductor.runtime.benchmarking import (
     TritonBenchmarker,
 )
 from torch._inductor.test_case import run_tests, TestCase
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_utils import (
     decorateIf,
     HardwareClassification,
@@ -727,6 +731,9 @@ class TestBenchmarker(TestCase):
         self.assertEqual(callable_calls, [])
 
     @unittest.skipIf(not HAS_GPU, "requires GPU")
+    @unittest.skipIf(
+        not device_tracing_supported(GPU_TYPE), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     @parametrize(
         "hip_value, expected_buffer_size_bytes",
         ((None, 1024), ("mock-hip", 256 * 1024 * 1024)),

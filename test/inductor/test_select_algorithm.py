@@ -37,8 +37,11 @@ from torch._inductor.test_case import run_tests, TestCase
 from torch._inductor.utils import is_big_gpu, run_and_get_code, run_and_get_kernels
 from torch._inductor.virtualized import V
 from torch._prims_common import ELEMENTWISE_TYPE_PROMOTION_KIND
-from torch.profiler import kineto_available
 from torch.testing import FileCheck
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_utils import (
     IS_LINUX,
     IS_WINDOWS,
@@ -1321,7 +1324,9 @@ class TestExternKernelCaller(TestCase):
         torch.testing.assert_close(out, expected, atol=1e-4, rtol=1e-4)
 
     @requires_gpu()
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(
+        not device_tracing_supported(GPU_TYPE), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     def test_extern_kernel_benchmark_request_with_profiling(self):
         """
         ExternKernelBenchmarkRequest.benchmark with
@@ -1329,8 +1334,8 @@ class TestExternKernelCaller(TestCase):
         and len(args) > 0.
 
         do_bench_using_profiling times the kernel by capturing device events through
-        the profiler, so a build without Kineto falls back to the legacy profiler and
-        cannot run this path.
+        the profiler, so a build without device tracing (no Kineto, or a CPU-only
+        Kineto) cannot run this path.
         """
         input_meta, output_meta = self._mm_tensor_metas()
 

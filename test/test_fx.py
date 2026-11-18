@@ -76,6 +76,10 @@ from torch.fx._symbolic_trace import PHBase, PHWithMeta
 
 from torch.fx.proxy import TraceError
 from torch.testing._internal.common_cuda import blas_library_context
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_utils import (
     find_library_location,
     HardwareClassification,
@@ -5978,6 +5982,9 @@ event=aten::addmm node=addmm_1 stack_trace=x = self.linear2(x)
 event={kernel_event} node=addmm_1 stack_trace=x = self.linear2(x)"""
             self.assertExpectedInline(actual_traces, expected)
 
+    @unittest.skipIf(
+        not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     @torch.fx.experimental._config.patch("enrich_profiler_metadata", True)
     def test_profiler_multiple_modules(self, device):
         """
@@ -6023,6 +6030,9 @@ event=aten::sub node=sub stack_trace=return x - 1
 event={kernel_event} node=sub stack_trace=return x - 1""",
         )
 
+    @unittest.skipIf(
+        not device_tracing_supported("cuda"), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     @torch.fx.experimental._config.patch("enrich_profiler_metadata", True)
     def test_profiler_nested_graph_modules(self, device):
         """

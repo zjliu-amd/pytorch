@@ -2,6 +2,7 @@
 
 import functools
 import logging
+import unittest
 from types import SimpleNamespace
 from unittest import mock
 
@@ -19,6 +20,10 @@ from torch._inductor.virtualized import NullHandler, V
 from torch.autograd import DeviceType
 from torch.fx.experimental._constant_symnode import ConstantIntNode
 from torch.fx.experimental.symbolic_shapes import DimDynamic, ShapeEnv
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -115,6 +120,9 @@ class TestBench(TestCase):
         log.warning("do_bench result: %s", res)
         self.assertGreater(res, 0)
 
+    @unittest.skipIf(
+        not device_tracing_supported(device_type), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     def test_do_bench_using_profiling(self):
         res = do_bench_using_profiling(self._bench_fn)
         log.warning("do_bench_using_profiling result: %s", res)

@@ -12,6 +12,10 @@ import torch._inductor.utils
 from torch import _dynamo as torchdynamo
 from torch._inductor import config
 from torch.profiler import ProfilerActivity, record_function
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_utils import TemporaryFileName
 from torch.testing._internal.inductor_utils import (
     GPU_TYPE,
@@ -312,6 +316,9 @@ class DynamoProfilerTests(torch._inductor.test_case.TestCase):
             check_triton_event(e)
 
     @unittest.skipIf(not HAS_TRITON, "requires cuda & triton")
+    @unittest.skipIf(
+        not device_tracing_supported(GPU_TYPE), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     def test_profiler_uses_cached_launcher(self):
         from torch._inductor.runtime.triton_heuristics import CachingAutotuner
 

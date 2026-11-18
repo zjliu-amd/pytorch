@@ -10,7 +10,11 @@ import unittest
 import torch
 from torch._inductor import config
 from torch._inductor.profiler import _InductorTraceProcessor, inductor_trace_handler
-from torch.profiler import kineto_available, profile, ProfilerActivity
+from torch.profiler import profile, ProfilerActivity
+from torch.testing._internal.common_profiler import (
+    DEVICE_TRACING_UNSUPPORTED_MSG,
+    device_tracing_supported,
+)
 from torch.testing._internal.common_utils import (
     run_tests,
     TestCase,
@@ -418,7 +422,9 @@ class InductorProfilerTraceTests(TestCase):
             self.assertEqual(updated_trace["traceEvents"][6]["args"]["stack"], stack)
 
     @xfailIfNoAcceleratorTriton
-    @unittest.skipIf(not kineto_available(), "Kineto is required")
+    @unittest.skipIf(
+        not device_tracing_supported(GPU_TYPE), DEVICE_TRACING_UNSUPPORTED_MSG
+    )
     def test_compile_timeline_provenance_survives_reset_scope(self):
         import torch._inductor.debug as inductor_debug
 
