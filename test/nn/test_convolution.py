@@ -3906,7 +3906,9 @@ class TestConvolutionNNDevice(NNTestCase):
         x = x.contiguous(memory_format=torch.contiguous_format)
         out_c = conv(x, weight)
         self.assertTrue(out_c.is_contiguous(memory_format=torch.contiguous_format))
-        self.assertEqual(out_c, out_nhwc)
+        # The NCHW and NHWC convs may run different conv algorithms (e.g. MIOpen
+        # may pick Winograd for one layout), so allow fp32 rounding differences.
+        self.assertEqual(out_c, out_nhwc, atol=5e-5, rtol=1e-5)
         self.assertEqual(weight.stride(), weight_stride)
 
     @skipCUDAIfNoCudnn
