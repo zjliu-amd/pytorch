@@ -16484,15 +16484,17 @@ def forward(self, arg0_1: "Sym(s77)", arg1_1: "Sym(s27)", arg2_1: "Sym(s53)", ar
                 )
                 return clone
 
-        # DeterministicGuard locks MIOpen's solver choice on gfx950. atol/rtol
-        # cover the fp16 hgemm noise floor on gfx90a. Derivation:
+        # DeterministicGuard does not pin MIOpen's solver: MIOpen still times
+        # solvers and may pick a Winograd fp16 solver (error up to ~3.1e-3
+        # here), hence atol=4e-3. atol/rtol also cover the fp16 hgemm noise
+        # floor on gfx90a. Derivation:
         # https://github.com/pytorch/pytorch/issues/183581
         with DeterministicGuard(True, warn_only=True):
             self.common(
                 Model(),
                 (torch.randn(8, 256, 16, 16),),
                 check_lowp=not is_halide_backend(self.device),
-                atol=2e-3,
+                atol=4e-3,
                 rtol=2e-3,
             )
 
