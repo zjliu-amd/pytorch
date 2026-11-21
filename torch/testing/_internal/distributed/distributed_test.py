@@ -8920,13 +8920,19 @@ class DistributedTest:
 
         def _test_monitored_barrier_allreduce_hang(self, wait_all_ranks):
             # tests expected behavior when nonzero rank hangs.
-            nccl_pg = dist.new_group(
-                ranks=list(range(int(self.world_size))),
-                # provide sufficient timeout so communicators
-                # can be initialized in ctor.
-                timeout=timedelta(seconds=15),
-                backend=dist.Backend.NCCL,
-            )
+            # Each nonzero rank r hangs on its own group [0, r]. On one shared
+            # group, a peer that timed out and aborted first can still complete
+            # the next rank's allreduce, so that rank's wait() would not raise.
+            nccl_pgs = {
+                r: dist.new_group(
+                    ranks=[0, r],
+                    # provide sufficient timeout so communicators
+                    # can be initialized in ctor.
+                    timeout=timedelta(seconds=15),
+                    backend=dist.Backend.NCCL,
+                )
+                for r in range(1, int(self.world_size))
+            }
             gloo_pg = dist.new_group(
                 ranks=list(range(int(self.world_size))),
                 backend=dist.Backend.GLOO,
@@ -8935,7 +8941,9 @@ class DistributedTest:
             # Let all ranks call allreduce first to set up communicators etc.
             # Directly simulating error here will run into store issue described
             # in https://github.com/pytorch/pytorch/issues/54524.
-            nccl_pg.allreduce(tensors).wait(timedelta(seconds=5))
+            for r, pg in nccl_pgs.items():
+                if self.rank in (0, r):
+                    pg.allreduce(tensors).wait(timedelta(seconds=5))
             # All ranks besides 0 call into allreduce. This is to simulate a
             # desync across the world, where some ranks call into
             # monitored_barrier() and others are stuck in collective comm. In
@@ -8951,7 +8959,9 @@ class DistributedTest:
                 else:
                     err_regex = "caught collective operation timeout"
                 with self.assertRaisesRegex(RuntimeError, err_regex):
-                    nccl_pg.allreduce(tensors).wait(timedelta(seconds=0.1))
+                    nccl_pgs[self.rank].allreduce(tensors).wait(
+                        timedelta(seconds=0.1)
+                    )
             else:
                 # Rank 0 should report first (in order) timed out rank or all ranks
                 # depending on wait_all_ranks flag passed into monitored_barrier.
@@ -8969,11 +8979,12 @@ class DistributedTest:
                         monitored_barrier_timeout_seconds, wait_all_ranks=wait_all_ranks
                     )
 
-            # The timed-out wait aborted nccl_pg's communicator on ranks != 0,
-            # so abort it on every rank. Finalizing it on rank 0 in
+            # The timed-out wait aborted each nccl_pgs communicator on its rank
+            # != 0, so abort them on every rank. Finalizing them on rank 0 in
             # destroy_process_group() runs an intra-node barrier with the
             # aborted peers (NCCL >= 2.31), which fails.
-            dist.distributed_c10d._abort_process_group(nccl_pg)
+            for pg in nccl_pgs.values():
+                dist.distributed_c10d._abort_process_group(pg)
             self._barrier(timeout=30)
 
         @with_nccl_blocking_wait
