@@ -1014,22 +1014,19 @@ print("RETRIED")
             tensor = torch.zeros(1024, device="cuda")
             torch.cuda.empty_cache()
             total_memory = torch.cuda.get_device_properties(0).total_memory
-            fraction = 0.5
-            if CUDA_DEVICE_IS_INTEGRATED:
-                fraction = 128 * 1024**2 / total_memory
+            # Use a small fixed limit rather than a large share of the device,
+            # so the test does not depend on how much memory other processes
+            # sharing the GPU hold.
+            limit = 128 * 1024**2 if CUDA_DEVICE_IS_INTEGRATED else 1024**3
+            fraction = limit / total_memory
             torch.cuda.set_per_process_memory_fraction(fraction, 0)
 
-            # Test that an allocation just below the limit is allowed.
-            if CUDA_DEVICE_IS_INTEGRATED:
-                application = (
-                    int(total_memory * fraction)
-                    - torch.cuda.max_memory_reserved()
-                    - 4 * 1024**2
-                )
-            else:
-                application = (
-                    int(total_memory * 0.499) - torch.cuda.max_memory_reserved()
-                )
+            # Test that an allocation just below the limit is allowed. The
+            # margin covers allocator rounding (e.g. expandable segment pages).
+            margin = 4 * 1024**2 if CUDA_DEVICE_IS_INTEGRATED else 64 * 1024**2
+            application = (
+                int(total_memory * fraction) - torch.cuda.max_memory_reserved() - margin
+            )
             tmp_tensor = torch.empty(application, dtype=torch.int8, device="cuda")
             del tmp_tensor
             torch.cuda.empty_cache()
@@ -1043,6 +1040,13 @@ print("RETRIED")
             )
             with self.assertRaisesRegex(RuntimeError, oom_regex):
                 torch.empty(application, dtype=torch.int8, device="cuda")
+
+            # The same request succeeds once the limit is lifted, so the OOM
+            # above came from the limit and not from a full device.
+            torch.cuda.set_per_process_memory_fraction(1.0, 0)
+            tmp_tensor = torch.empty(application, dtype=torch.int8, device="cuda")
+            del tmp_tensor
+            torch.cuda.empty_cache()
 
             # ensure out of memory error doesn't disturb subsequent kernel
             tensor.fill_(1)
