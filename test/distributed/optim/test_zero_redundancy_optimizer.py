@@ -10,6 +10,7 @@ import os
 import sys
 from contextlib import contextmanager, nullcontext
 from typing import Any, cast
+from unittest import mock
 
 import numpy as np
 
@@ -26,7 +27,7 @@ from torch.distributed.algorithms.ddp_comm_hooks.ddp_zero_hook import (
 )
 from torch.distributed.algorithms.ddp_comm_hooks.default_hooks import allreduce_hook
 from torch.distributed.algorithms.join import Join, Joinable, JoinHook
-from torch.distributed.optim import ZeroRedundancyOptimizer
+from torch.distributed.optim import zero_redundancy_optimizer, ZeroRedundancyOptimizer
 from torch.distributed.optim.zero_redundancy_optimizer import _broadcast_object
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW, SGD
@@ -42,9 +43,11 @@ from torch.testing._internal.common_distributed import (
     TEST_SKIPS,
 )
 from torch.testing._internal.common_utils import (
+    get_cycles_per_ms,
     instantiate_parametrized_tests,
     parametrize,
     run_tests,
+    skip_but_pass_in_sandcastle_if,
 )
 
 
@@ -690,6 +693,81 @@ class TestZeroRedundancyOptimizerDistributed(TestZeroRedundancyOptimizerContinuo
             device=self.device,
         )
         optimizer.load_state_dict(optimizer_state_dict)
+
+    @skip_if_no_gpu
+    @skip_but_pass_in_sandcastle_if(
+        device_type != "cuda", "Delaying the stream needs torch.cuda._sleep"
+    )
+    def test_consolidate_state_dict_waits_for_copies(self):
+        """Check that the CPU state consolidated on the target rank is ready to
+        be read on the host once ``consolidate_state_dict()`` returns, even
+        when the device stream lags behind the host."""
+        LR = 1e-3
+        MOMENTUM = 0.99
+        REFERENCE_RANK = 0
+        torch.manual_seed(self.rank)
+        model = torch.nn.Sequential(
+            *[torch.nn.Linear(64, 64) for _ in range(2 * self.world_size)]
+        ).to(self.device)
+        optimizer = ZeroRedundancyOptimizer(
+            model.parameters(),
+            optimizer_class=SGD,
+            lr=LR,
+            momentum=MOMENTUM,  # ensure there exists state to shard
+        )
+        model(torch.randn(8, 64, device=self.device)).sum().backward()
+        optimizer.step()
+
+        # Delay the stream right before each copy of the sharded state to
+        # the CPU so that a copy that does not block is still in flight when
+        # `consolidate_state_dict()` returns
+        sleep_cycles = int(200 * get_cycles_per_ms())
+        copy_to_device = zero_redundancy_optimizer._recursive_copy_to_device
+
+        def delayed_copy_to_device(*args, **kwargs):
+            torch.cuda._sleep(sleep_cycles)
+            return copy_to_device(*args, **kwargs)
+
+        with mock.patch.object(
+            zero_redundancy_optimizer,
+            "_recursive_copy_to_device",
+            delayed_copy_to_device,
+        ):
+            optimizer.consolidate_state_dict(to=REFERENCE_RANK)
+        consolidated_state = None
+        if self.rank == REFERENCE_RANK:
+            # Read the consolidated state on the host without synchronizing
+            consolidated_state = {
+                param_index: param_state["momentum_buffer"].clone()
+                for param_index, param_state in optimizer.state_dict()["state"].items()
+            }
+
+        # Compare it on all ranks against each rank's own state, indexed
+        # globally, so that all ranks fail together
+        object_list = [consolidated_state]
+        dist.broadcast_object_list(object_list, src=REFERENCE_RANK)
+        consolidated_state = object_list[0]
+        local_state = {
+            optimizer._param_to_index[param]: param_state["momentum_buffer"].cpu()
+            for param, param_state in optimizer.optim.state.items()
+        }
+        all_local_states: list[Any] = [None] * self.world_size
+        dist.all_gather_object(all_local_states, local_state)
+        expected_state = {
+            param_index: momentum_buffer
+            for local_state in all_local_states
+            for param_index, momentum_buffer in local_state.items()
+        }
+        self.assertEqual(len(expected_state), len(list(model.parameters())))
+        self.assertEqual(consolidated_state.keys(), expected_state.keys())
+        for param_index, momentum_buffer in expected_state.items():
+            torch.testing.assert_close(
+                consolidated_state[param_index],
+                momentum_buffer,
+                rtol=0,
+                atol=0,
+                msg=f"Consolidated state of parameter {param_index} differs",
+            )
 
     def test_nondefault_process_group(self):
         """Check that ZeroRedundancyOptimizer works with a non-default process

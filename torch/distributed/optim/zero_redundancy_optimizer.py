@@ -550,13 +550,16 @@ class ZeroRedundancyOptimizer(Optimizer, Joinable):
             )
             if self.rank == to:
                 # Consolidate all local `state_dict`s on this rank, storing on
-                # CPU to save GPU memory
+                # CPU to save GPU memory. The copies must be blocking: the
+                # returned CPU tensors may be read on the host right away
+                # (e.g. pickled for `broadcast_object_list()`), while a
+                # non-blocking device-to-host copy may still be in flight
                 if rank == self.rank:
                     # Directly append own optimizer state
                     self._all_state_dicts.append(
                         _recursive_copy_to_device(
                             self.optim.state_dict(),
-                            non_blocking=True,
+                            non_blocking=False,
                             device=torch.device("cpu"),
                         )
                     )
@@ -571,7 +574,7 @@ class ZeroRedundancyOptimizer(Optimizer, Joinable):
                     self._all_state_dicts.append(
                         _recursive_copy_to_device(
                             local_state_dict,
-                            non_blocking=True,
+                            non_blocking=False,
                             device=torch.device("cpu"),
                         )
                     )
