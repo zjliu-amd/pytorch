@@ -1928,10 +1928,19 @@ namespace {
         x_b1[i] = VT(x_f1[i]);
         x_b2[i] = VT(x_f2[i]);
         x_b3[i] = VT(x_f3[i]);
+        // The reduced-float functionals convert their inputs to float and
+        // compute in float, so feed the reference the same rounded inputs:
+        // otherwise the input rounding error, which grows with len, is
+        // compared against a fixed tolerance.
+        x_f1[i] = RT(x_b1[i]);
+        x_f2[i] = RT(x_b2[i]);
+        x_f3[i] = RT(x_b3[i]);
       }
       float atol = 0.01f;
       float rtol = 0.01f;
-      auto cmp = [=](RT ref, VT val) { return std::abs(ref - val) <= atol + rtol * std::abs(val); };
+      // Most functionals return float (reduce2_all rounds to VT itself);
+      // compare in float without rounding the result again.
+      auto cmp = [=](RT ref, RT val) { return std::abs(ref - val) <= atol + rtol * std::abs(val); };
       auto sum = [](auto& x, auto& y) { return x + y; };
       auto max = [](auto& x, auto& y) { return at::vec::maximum(x, y); };
       // ReduceAll
