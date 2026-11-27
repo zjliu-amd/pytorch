@@ -883,6 +883,9 @@ class AbstractIsolatedCollectivesTest(CollectivesTestMixin, C10dBackendTest):
         if not self.supports_gather_single:
             with self.assertRaisesRegex(RuntimeError, "does not support gather_single"):
                 self._test_gather_single(4, torch.float32, False)
+            # No collective ran, so gloo may not have finished connecting on
+            # every rank; a rank tearing down now fails its peer's connect.
+            dist.barrier()
             return
         self._test_transport_matrix(self._test_gather_single)
 
